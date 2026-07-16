@@ -53,7 +53,7 @@ const commands = [
                 .addStringOption(option => 
                     option.setName('message_id').setDescription('A giveaway üzenetének az ID-ja').setRequired(true))
         )
-        // 3. Alparancs: END (A te kérésedre átnevezve)
+        // 3. Alparancs: END 
         .addSubcommand(subcommand =>
             subcommand
                 .setName('end')
@@ -126,7 +126,7 @@ client.on('interactionCreate', async (interaction) => {
             const endTime = Math.floor((Date.now() + durationMs) / 1000);
 
             const giveawayEmbed = new EmbedBuilder()
-                .setColor('#00f2fe')
+                .setColor('#00f2fe') // Kék szín
                 .setAuthor({ name: userDisplay, iconURL: userAvatar })
                 .setTitle('🎁 Nyereményjáték 🎁')
                 .setDescription('Reagálj a 🎉 emojival a jelentkezéshez!')
@@ -147,7 +147,6 @@ client.on('interactionCreate', async (interaction) => {
                 try {
                     const targetMessage = await interaction.channel.messages.fetch(message.id);
                     
-                    // BIZTONSÁGI ELLENŐRZÉS: Ha már leállították az end paranccsal, ne fusson le!
                     if (targetMessage.embeds[0].description.includes('lezárult')) return;
 
                     const reaction = targetMessage.reactions.cache.get('🎉');
@@ -159,7 +158,7 @@ client.on('interactionCreate', async (interaction) => {
 
                     if (users.length === 0) {
                         const noWinnerEmbed = new EmbedBuilder()
-                            .setColor('#4f545c')
+                            .setColor('#00f2fe') // Marad kék
                             .setAuthor({ name: userDisplay, iconURL: userAvatar })
                             .setTitle('🎁 Nyereményjáték 🎁')
                             .setDescription('A nyereményjáték lezárult!')
@@ -178,7 +177,7 @@ client.on('interactionCreate', async (interaction) => {
                         const winnersMention = winners.map(id => `<@${id}>`).join(', ');
 
                         const endEmbed = new EmbedBuilder()
-                            .setColor('#23272a')
+                            .setColor('#00f2fe') // Marad kék
                             .setAuthor({ name: userDisplay, iconURL: userAvatar })
                             .setTitle('🎁 Nyereményjáték 🎁')
                             .setDescription('A nyereményjáték lezárult!')
@@ -237,7 +236,7 @@ client.on('interactionCreate', async (interaction) => {
                 const winnersMention = winners.map(id => `<@${id}>`).join(', ');
 
                 const rerollEmbed = new EmbedBuilder()
-                    .setColor('#f0932b')
+                    .setColor('#00f2fe') // Marad kék
                     .setAuthor({ 
                         name: oldEmbed.author ? oldEmbed.author.name : userDisplay, 
                         iconURL: oldEmbed.author ? oldEmbed.author.iconURL : userAvatar 
@@ -299,7 +298,7 @@ client.on('interactionCreate', async (interaction) => {
 
                 if (users.length === 0) {
                     const noWinnerEmbed = new EmbedBuilder()
-                        .setColor('#4f545c')
+                        .setColor('#00f2fe') // Marad kék
                         .setAuthor({ 
                             name: oldEmbed.author ? oldEmbed.author.name : userDisplay, 
                             iconURL: oldEmbed.author ? oldEmbed.author.iconURL : userAvatar 
@@ -323,7 +322,7 @@ client.on('interactionCreate', async (interaction) => {
                 const winnersMention = winners.map(id => `<@${id}>`).join(', ');
 
                 const endEmbed = new EmbedBuilder()
-                    .setColor('#e74c3c') // Pirosas szín a leállításhoz
+                    .setColor('#00f2fe') // Marad kék
                     .setAuthor({ 
                         name: oldEmbed.author ? oldEmbed.author.name : userDisplay, 
                         iconURL: oldEmbed.author ? oldEmbed.author.iconURL : userAvatar 
