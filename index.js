@@ -29,7 +29,7 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMessageReactions,
-        GatewayIntentBits.GuildMembers
+        GatewayIntentBits.GuildMembers // Ez felel a Boosterek felismeréséért is!
     ],
     partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
@@ -50,6 +50,8 @@ const commands = [
                     option.setName('prize').setDescription('Mi a nyeremény?').setRequired(true))
                 .addIntegerOption(option => 
                     option.setName('winners').setDescription('Hány nyertes legyen?').setRequired(true).setMinValue(1))
+                .addIntegerOption(option => 
+                    option.setName('booster_bonus').setDescription('Hány %-kal legyen több esélye a Boostereknek? (Opcionális)').setMinValue(1))
         )
         .addSubcommand(subcommand =>
             subcommand
@@ -103,13 +105,35 @@ client.once('ready', async () => {
 client.on('guildMemberAdd', (member) => updateStatus(member.guild));
 client.on('guildMemberRemove', (member) => updateStatus(member.guild));
 
-function drawWinners(usersArray, count) {
-    const shuffled = [...usersArray].sort(() => 0.5 - Math.random());
-    return shuffled.slice(0, count);
+// --- SÚLYOZOTT SORSOLÁS FUNKCIÓ (Booster Bónuszhoz) ---
+function drawWinners(participants, count) {
+    const winners = [];
+    let currentParticipants = [...participants];
+
+    for (let i = 0; i < count; i++) {
+        if (currentParticipants.length === 0) break;
+        
+        // Összes esély (súly) kiszámolása
+        const totalWeight = currentParticipants.reduce((sum, p) => sum + p.weight, 0);
+        let random = Math.random() * totalWeight;
+        
+        // Sorsolás
+        for (let j = 0; j < currentParticipants.length; j++) {
+            random -= currentParticipants[j].weight;
+            if (random <= 0) {
+                winners.push(currentParticipants[j].id);
+                currentParticipants.splice(j, 1); // Kiveszük, hogy ne nyerhessen kétszer
+                break;
+            }
+        }
+    }
+    return winners;
 }
 
 // --- INTERAKCIÓK KEZELÉSE ---
 client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isCommand() && !interaction.isButton()) return;
+
     const userAvatar = interaction.user.displayAvatarURL({ forceStatic: false, size: 256 });
     const userDisplay = interaction.user.displayName || interaction.user.username;
 
@@ -149,6 +173,7 @@ client.on('interactionCreate', async (interaction) => {
                 const durationInput = interaction.options.getString('duration');
                 const prize = interaction.options.getString('prize');
                 const winnerCount = interaction.options.getInteger('winners');
+                const boosterBonus = interaction.options.getInteger('booster_bonus') || 0; // Kérte bónuszt?
                 
                 const durationMs = ms(durationInput);
                 if (!durationMs) {
@@ -171,6 +196,11 @@ client.on('interactionCreate', async (interaction) => {
                     .setFooter({ text: 'Vége' })
                     .setTimestamp(new Date(Date.now() + durationMs));
 
+                // Ha van bónusz, kiírjuk az Embedbe (innen tudja majd az end és a reroll parancs is!)
+                if (boosterBonus > 0) {
+                    giveawayEmbed.addFields({ name: '💎 Booster Bónusz', value: `+${boosterBonus}% esély a nyerésre!`, inline: false });
+                }
+
                 const message = await interaction.reply({ embeds: [giveawayEmbed], fetchReply: true });
                 await message.react('🎉');
 
@@ -180,45 +210,34 @@ client.on('interactionCreate', async (interaction) => {
                         if (targetMessage.embeds[0].description.includes('lezárult')) return;
 
                         const reaction = targetMessage.reactions.cache.get('🎉');
-                        let users = [];
+                        let validUsers = [];
                         if (reaction) {
                             const reactedUsers = await reaction.users.fetch();
-                            users = reactedUsers.filter(user => !user.bot).map(user => user.id);
+                            validUsers = reactedUsers.filter(user => !user.bot).map(user => user.id);
                         }
 
-                        if (users.length === 0) {
-                            const noWinnerEmbed = new EmbedBuilder()
-                                .setColor('#00f2fe')
-                                .setAuthor({ name: userDisplay, iconURL: userAvatar })
-                                .setTitle('🎁 Nyereményjáték 🎁')
+                        if (validUsers.length === 0) {
+                            const noWinnerEmbed = EmbedBuilder.from(targetMessage.embeds[0])
                                 .setDescription('A nyereményjáték lezárult!')
-                                .addFields(
-                                    { name: 'Nyeremény', value: prize, inline: false },
-                                    { name: 'Nyertesek száma', value: `${winnerCount}`, inline: true },
-                                    { name: 'Indította', value: `<@${interaction.user.id}>`, inline: true },
-                                    { name: 'Nyertes(ek)', value: 'Nincs résztvevő 😢', inline: false }
-                                )
-                                .setFooter({ text: 'Vége' })
-                                .setTimestamp(new Date());
+                                .addFields({ name: 'Nyertes(ek)', value: 'Nincs résztvevő 😢', inline: false });
 
                             await targetMessage.edit({ embeds: [noWinnerEmbed] });
                         } else {
-                            const winners = drawWinners(users, winnerCount);
+                            // Súlyozott résztvevők előkészítése
+                            const members = await targetMessage.guild.members.fetch({ user: validUsers });
+                            const participants = validUsers.map(userId => {
+                                const member = members.get(userId);
+                                const isBooster = member ? member.premiumSince !== null : false;
+                                const weight = isBooster ? (100 + boosterBonus) : 100;
+                                return { id: userId, weight: weight };
+                            });
+
+                            const winners = drawWinners(participants, winnerCount);
                             const winnersMention = winners.map(id => `<@${id}>`).join(', ');
 
-                            const endEmbed = new EmbedBuilder()
-                                .setColor('#00f2fe')
-                                .setAuthor({ name: userDisplay, iconURL: userAvatar })
-                                .setTitle('🎁 Nyereményjáték 🎁')
+                            const endEmbed = EmbedBuilder.from(targetMessage.embeds[0])
                                 .setDescription('A nyereményjáték lezárult!')
-                                .addFields(
-                                    { name: 'Nyeremény', value: prize, inline: false },
-                                    { name: 'Nyertesek száma', value: `${winnerCount}`, inline: true },
-                                    { name: 'Indította', value: `<@${interaction.user.id}>`, inline: true },
-                                    { name: 'Nyertes(ek)', value: winnersMention, inline: false }
-                                )
-                                .setFooter({ text: 'Vége' })
-                                .setTimestamp(new Date());
+                                .addFields({ name: 'Nyertes(ek)', value: winnersMention, inline: false });
 
                             await targetMessage.edit({ embeds: [endEmbed] });
 
@@ -244,35 +263,47 @@ client.on('interactionCreate', async (interaction) => {
                         return interaction.editReply({ content: '❌ A megadott ID nem egy érvényes nyereményjáték üzenethez tartozik!' });
                     }
                     const reaction = targetMessage.reactions.cache.get('🎉');
-                    let users = [];
+                    let validUsers = [];
                     if (reaction) {
                         const reactedUsers = await reaction.users.fetch();
-                        users = reactedUsers.filter(user => !user.bot).map(user => user.id);
+                        validUsers = reactedUsers.filter(user => !user.bot).map(user => user.id);
                     }
-                    if (users.length === 0) {
+                    if (validUsers.length === 0) {
                         return interaction.editReply({ content: '❌ Nem találtam egyetlen érvényes reakciót sem ezen az üzeneten.' });
                     }
+                    
                     const oldEmbed = targetMessage.embeds[0];
                     const prizeField = oldEmbed.fields.find(f => f.name === 'Nyeremény');
                     const prize = prizeField ? prizeField.value : 'Ismeretlen nyeremény';
                     const winnerCountField = oldEmbed.fields.find(f => f.name === 'Nyertesek száma');
                     const winnerCount = winnerCountField ? parseInt(winnerCountField.value) : 1;
-                    const winners = drawWinners(users, winnerCount);
+                    
+                    // Booster bónusz kinyerése az eredeti embedből
+                    const boosterField = oldEmbed.fields.find(f => f.name === '💎 Booster Bónusz');
+                    const boosterBonus = boosterField ? parseInt(boosterField.value.replace(/\D/g, '')) : 0;
+
+                    const members = await targetMessage.guild.members.fetch({ user: validUsers });
+                    const participants = validUsers.map(userId => {
+                        const member = members.get(userId);
+                        const isBooster = member ? member.premiumSince !== null : false;
+                        const weight = isBooster ? (100 + boosterBonus) : 100;
+                        return { id: userId, weight: weight };
+                    });
+
+                    const winners = drawWinners(participants, winnerCount);
                     const winnersMention = winners.map(id => `<@${id}>`).join(', ');
-                    const rerollEmbed = new EmbedBuilder()
-                        .setColor('#00f2fe')
-                        .setAuthor({ name: oldEmbed.author ? oldEmbed.author.name : userDisplay, iconURL: oldEmbed.author ? oldEmbed.author.iconURL : userAvatar })
-                        .setTitle('🎲 Nyereményjáték 🎲')
-                        .setDescription('A nyereményjátékot újra sorsolták!')
-                        .addFields(
-                            { name: 'Nyeremény', value: prize, inline: false },
-                            { name: 'Nyertesek száma', value: `${winnerCount}`, inline: true },
-                            { name: 'Indította', value: oldEmbed.fields.find(f => f.name === 'Indította').value, inline: true },
-                            { name: 'Nyertes(ek)', value: winnersMention, inline: false }
-                        )
-                        .setFooter({ text: 'Vége' })
-                        .setTimestamp(oldEmbed.timestamp ? new Date(oldEmbed.timestamp) : new Date());
+                    
+                    // Frissítjük a nyertes mezőt, a többit meghagyjuk (így a bónusz mező is marad)
+                    const rerollEmbed = EmbedBuilder.from(oldEmbed);
+                    const winnerFieldIndex = rerollEmbed.data.fields.findIndex(f => f.name === 'Nyertes(ek)');
+                    if (winnerFieldIndex !== -1) {
+                        rerollEmbed.data.fields[winnerFieldIndex].value = winnersMention;
+                    } else {
+                        rerollEmbed.addFields({ name: 'Nyertes(ek)', value: winnersMention, inline: false });
+                    }
+
                     await targetMessage.edit({ embeds: [rerollEmbed] });
+                    
                     let congratulationText = winners.length > 1
                         ? `🎲 **Újrasorsolás!** Gratulálok ${winnersMention}! A nyereményetek: **${prize}/fő**! 🎉`
                         : `🎲 **Újrasorsolás!** Gratulálok ${winnersMention}! A nyereményed: **${prize}**! 🎉`;
@@ -296,49 +327,46 @@ client.on('interactionCreate', async (interaction) => {
                         return interaction.editReply({ content: '❌ Ez a nyereményjáték már lezárult, nem lehet újra leállítani!' });
                     }
                     const reaction = targetMessage.reactions.cache.get('🎉');
-                    let users = [];
+                    let validUsers = [];
                     if (reaction) {
                         const reactedUsers = await reaction.users.fetch();
-                        users = reactedUsers.filter(user => !user.bot).map(user => user.id);
+                        validUsers = reactedUsers.filter(user => !user.bot).map(user => user.id);
                     }
                     const oldEmbed = targetMessage.embeds[0];
                     const prizeField = oldEmbed.fields.find(f => f.name === 'Nyeremény');
                     const prize = prizeField ? prizeField.value : 'Ismeretlen nyeremény';
                     const winnerCountField = oldEmbed.fields.find(f => f.name === 'Nyertesek száma');
                     const winnerCount = winnerCountField ? parseInt(winnerCountField.value) : 1;
-                    if (users.length === 0) {
-                        const noWinnerEmbed = new EmbedBuilder()
-                            .setColor('#00f2fe')
-                            .setAuthor({ name: oldEmbed.author ? oldEmbed.author.name : userDisplay, iconURL: oldEmbed.author ? oldEmbed.author.iconURL : userAvatar })
-                            .setTitle('🎁 Nyereményjáték 🎁')
+                    
+                    if (validUsers.length === 0) {
+                        const noWinnerEmbed = EmbedBuilder.from(oldEmbed)
                             .setDescription('A nyereményjáték lezárult! (Idő előtt leállítva)')
-                            .addFields(
-                                { name: 'Nyeremény', value: prize, inline: false },
-                                { name: 'Nyertesek száma', value: `${winnerCount}`, inline: true },
-                                { name: 'Indította', value: oldEmbed.fields.find(f => f.name === 'Indította').value, inline: true },
-                                { name: 'Nyertes(ek)', value: 'Nincs résztvevő 😢', inline: false }
-                            )
-                            .setFooter({ text: 'Vége' })
-                            .setTimestamp(new Date());
+                            .addFields({ name: 'Nyertes(ek)', value: 'Nincs résztvevő 😢', inline: false });
+                        
                         await targetMessage.edit({ embeds: [noWinnerEmbed] });
                         return interaction.editReply({ content: '✅ A játékot leállítottad, de nem volt jelentkező.' });
                     }
-                    const winners = drawWinners(users, winnerCount);
+                    
+                    const boosterField = oldEmbed.fields.find(f => f.name === '💎 Booster Bónusz');
+                    const boosterBonus = boosterField ? parseInt(boosterField.value.replace(/\D/g, '')) : 0;
+
+                    const members = await targetMessage.guild.members.fetch({ user: validUsers });
+                    const participants = validUsers.map(userId => {
+                        const member = members.get(userId);
+                        const isBooster = member ? member.premiumSince !== null : false;
+                        const weight = isBooster ? (100 + boosterBonus) : 100;
+                        return { id: userId, weight: weight };
+                    });
+
+                    const winners = drawWinners(participants, winnerCount);
                     const winnersMention = winners.map(id => `<@${id}>`).join(', ');
-                    const endEmbed = new EmbedBuilder()
-                        .setColor('#00f2fe')
-                        .setAuthor({ name: oldEmbed.author ? oldEmbed.author.name : userDisplay, iconURL: oldEmbed.author ? oldEmbed.author.iconURL : userAvatar })
-                        .setTitle('🎁 Nyereményjáték 🎁')
+                    
+                    const endEmbed = EmbedBuilder.from(oldEmbed)
                         .setDescription('A nyereményjáték lezárult! (Idő előtt leállítva)')
-                        .addFields(
-                            { name: 'Nyeremény', value: prize, inline: false },
-                            { name: 'Nyertesek száma', value: `${winnerCount}`, inline: true },
-                            { name: 'Indította', value: oldEmbed.fields.find(f => f.name === 'Indította').value, inline: true },
-                            { name: 'Nyertes(ek)', value: winnersMention, inline: false }
-                        )
-                        .setFooter({ text: 'Vége' })
-                        .setTimestamp(new Date());
+                        .addFields({ name: 'Nyertes(ek)', value: winnersMention, inline: false });
+                    
                     await targetMessage.edit({ embeds: [endEmbed] });
+                    
                     let congratulationText = winners.length > 1
                         ? `🛑 **A játék véget ért!** Gratulálok ${winnersMention}! A nyereményetek: **${prize}/fő**! 🎉`
                         : `🛑 **A játék véget ért!** Gratulálok ${winnersMention}! A nyereményed: **${prize}**! 🎉`;
@@ -366,7 +394,7 @@ client.on('interactionCreate', async (interaction) => {
             const ticketChannel = await interaction.guild.channels.create({
                 name: ticketName,
                 type: ChannelType.GuildText,
-                parent: '1527688497593585746', // <--- Itt a te egyedi ID-d!
+                parent: '1527688497593585746', // A Te Kategória ID-d
                 permissionOverwrites: [
                     { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
                     { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
