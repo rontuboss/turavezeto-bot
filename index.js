@@ -14,7 +14,7 @@ const {
     ButtonStyle,
     ChannelType,
     PermissionFlagsBits,
-    AttachmentBuilder // Ez kell a leirat (transcript) fájlhoz!
+    AttachmentBuilder
 } = require('discord.js');
 const ms = require('ms');
 
@@ -366,6 +366,7 @@ client.on('interactionCreate', async (interaction) => {
             const ticketChannel = await interaction.guild.channels.create({
                 name: ticketName,
                 type: ChannelType.GuildText,
+                parent: '1527688497593585746', // <--- Itt a te egyedi ID-d!
                 permissionOverwrites: [
                     { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
                     { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
@@ -393,7 +394,6 @@ client.on('interactionCreate', async (interaction) => {
         // Ticket Bezárása (Csak Adminoknak + Transcript)
         if (interaction.customId === 'close_ticket') {
             
-            // 1. Jogosultság ellenőrzése (Csak aki tud csatornát kezelni, az tudja lezárni)
             if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
                 return interaction.reply({ content: '❌ Ehhez nincs jogosultságod! Csak a moderátorok zárhatják le a ticketet.', ephemeral: true });
             }
@@ -401,7 +401,6 @@ client.on('interactionCreate', async (interaction) => {
             await interaction.reply({ content: '🔒 A ticket lezárása és a leirat (transcript) mentése folyamatban...' });
 
             try {
-                // 2. Üzenetek kimentése (Transcript)
                 const messages = await interaction.channel.messages.fetch({ limit: 100 });
                 let transcriptData = `TICKET LEIRAT - ${interaction.channel.name}\nLezárva: ${new Date().toLocaleString('hu-HU')}\n\n`;
                 
@@ -411,20 +410,18 @@ client.on('interactionCreate', async (interaction) => {
 
                 const transcriptAttachment = new AttachmentBuilder(Buffer.from(transcriptData, 'utf-8'), { name: `${interaction.channel.name}-transcript.txt` });
 
-                // 3. Log csatorna megkeresése vagy létrehozása
                 let logChannel = interaction.guild.channels.cache.find(c => c.name === 'ticket-logok');
                 if (!logChannel) {
                     logChannel = await interaction.guild.channels.create({
                         name: 'ticket-logok',
                         type: ChannelType.GuildText,
                         permissionOverwrites: [
-                            { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] }, // Rejtett mindenki elől
+                            { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] }, 
                             { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
                         ]
                     });
                 }
 
-                // 4. Mentés elküldése a log csatornába
                 const logEmbed = new EmbedBuilder()
                     .setTitle('📝 Ticket Lezárva')
                     .setColor('#e74c3c')
@@ -436,7 +433,6 @@ client.on('interactionCreate', async (interaction) => {
 
                 await logChannel.send({ embeds: [logEmbed], files: [transcriptAttachment] });
 
-                // 5. Ticket törlése 5 másodperc múlva
                 setTimeout(() => {
                     interaction.channel.delete().catch(err => console.error('Nem sikerült törölni a csatornát:', err));
                 }, 5000);
