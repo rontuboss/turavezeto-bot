@@ -9,6 +9,14 @@ const {
 } = require('discord.js');
 const ms = require('ms');
 
+// --- TICKET KATEGÓRIA BEÁLLÍTÁSOK ---
+// Cseréld ki az ID-kat a saját Discord kategóriáid azonosítójára!
+const TICKET_CONFIG = {
+    DEFAULT_PARENT: '1527688497593585746', // Alapértelmezett ticket kategória ID
+    SORSOLAS_PARENT: '1534568444974862506', // Nyereményjáték kategória ID
+    PARTNER_PARENT: '1534568268956827758'         // Partner kategória ID
+};
+
 // --- ADATBÁZIS CSATLAKOZÁS ---
 mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log('✅ Adatbázis sikeresen csatlakoztatva!'))
@@ -63,7 +71,7 @@ function updateStatus(guild) {
     if (guild) client.user.setPresence({ activities: [{ name: `👥 ${guild.memberCount} tag | /giveaway`, type: 4 }], status: 'online' });
 }
 
-// SORSOLÓ FÜGGVÉNY (ALAPÉRTELMEZETT LEZÁRÁSHOZ)
+// SORSOLÓ FÜGGVÉNY
 async function endGiveaway(gwData) {
     try {
         const checkDb = await Giveaway.findOne({ messageId: gwData.messageId });
@@ -194,6 +202,93 @@ client.on('guildMemberAdd', async (member) => {
     } catch (error) {}
 });
 client.on('guildMemberRemove', (member) => updateStatus(member.guild));
+
+// --- CHAT ÜZENETEK FIGYELÉSE (.sorsolas ÉS .partner PARANCSOK) ---
+client.on('messageCreate', async (message) => {
+    if (message.author.bot || !message.guild) return;
+
+    const content = message.content.toLowerCase().trim();
+
+    // SORSOLÁS / NYEREMÉNYJÁTÉK KATEGÓRIÁBA ÁTMOZGATÁS
+    if (content === '.sorsolas') {
+        if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+            return message.reply('❌ Nincs jogosultságod a ticket átmozgatásához!');
+        }
+
+        const targetCategoryId = TICKET_CONFIG.SORSOLAS_PARENT;
+        if (!targetCategoryId || targetCategoryId.includes('IDE_ÍRD')) {
+            return message.reply('❌ Nincs beállítva a nyereményjáték kategória ID a kód elején!');
+        }
+
+        // Kategóriában lévő csatornák szűrése
+        const channelsInCategory = message.guild.channels.cache.filter(c => c.parentId === targetCategoryId);
+        
+        let nextNum = 1;
+        if (channelsInCategory.size > 0) {
+            let maxNum = 0;
+            channelsInCategory.forEach(c => {
+                const parts = c.name.split('-');
+                const num = parseInt(parts[parts.length - 1]);
+                if (!isNaN(num) && num > maxNum) maxNum = num;
+            });
+            nextNum = maxNum + 1;
+        }
+
+        // Felhasználónév kiszedése a csatorna eredeti nevéből (pl. ticket-pisti -> pisti)
+        let rawUser = message.channel.name.replace(/^ticket-/, '').replace(/-nyeremeny-\d+$/, '').replace(/-partner-\d+$/, '');
+        const cleanUser = rawUser.split('-')[0] || 'user';
+
+        const newName = `${cleanUser}-nyeremeny-${nextNum}`;
+        try {
+            await message.channel.setParent(targetCategoryId);
+            await message.channel.setName(newName);
+            await message.reply(`✅ Ticket áthelyezve a **Nyereményjáték** kategóriába! Új név: \`${newName}\``);
+        } catch (err) {
+            console.error(err);
+            await message.reply('❌ Hiba történt az áthelyezés során! Ellenőrizd a kategória ID-t és a bot jogait.');
+        }
+    }
+
+    // PARTNER KATEGÓRIÁBA ÁTMOZGATÁS
+    if (content === '.partner') {
+        if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+            return message.reply('❌ Nincs jogosultságod a ticket átmozgatásához!');
+        }
+
+        const targetCategoryId = TICKET_CONFIG.PARTNER_PARENT;
+        if (!targetCategoryId || targetCategoryId.includes('IDE_ÍRD')) {
+            return message.reply('❌ Nincs beállítva a partner kategória ID a kód elején!');
+        }
+
+        // Kategóriában lévő csatornák szűrése
+        const channelsInCategory = message.guild.channels.cache.filter(c => c.parentId === targetCategoryId);
+        
+        let nextNum = 1;
+        if (channelsInCategory.size > 0) {
+            let maxNum = 0;
+            channelsInCategory.forEach(c => {
+                const parts = c.name.split('-');
+                const num = parseInt(parts[parts.length - 1]);
+                if (!isNaN(num) && num > maxNum) maxNum = num;
+            });
+            nextNum = maxNum + 1;
+        }
+
+        // Felhasználónév kiszedése a csatorna eredeti nevéből
+        let rawUser = message.channel.name.replace(/^ticket-/, '').replace(/-nyeremeny-\d+$/, '').replace(/-partner-\d+$/, '');
+        const cleanUser = rawUser.split('-')[0] || 'user';
+
+        const newName = `${cleanUser}-partner-${nextNum}`;
+        try {
+            await message.channel.setParent(targetCategoryId);
+            await message.channel.setName(newName);
+            await message.reply(`✅ Ticket áthelyezve a **Partner** kategóriába! Új név: \`${newName}\``);
+        } catch (err) {
+            console.error(err);
+            await message.reply('❌ Hiba történt az áthelyezés során! Ellenőrizd a kategória ID-t és a bot jogait.');
+        }
+    }
+});
 
 // --- INTERAKCIÓK KEZELÉSE ---
 client.on('interactionCreate', async (interaction) => {
@@ -334,7 +429,7 @@ client.on('interactionCreate', async (interaction) => {
             if (interaction.guild.channels.cache.find(c => c.name === ticketName.toLowerCase())) return interaction.reply({ content: `❌ Már van nyitott ticketed!`, ephemeral: true });
 
             const ticketChannel = await interaction.guild.channels.create({
-                name: ticketName, type: ChannelType.GuildText, parent: '1527688497593585746',
+                name: ticketName, type: ChannelType.GuildText, parent: TICKET_CONFIG.DEFAULT_PARENT,
                 permissionOverwrites: [{ id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] }, { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }, { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }]
             });
 
