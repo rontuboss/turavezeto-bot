@@ -10,11 +10,10 @@ const {
 const ms = require('ms');
 
 // --- TICKET KATEGÓRIA BEÁLLÍTÁSOK ---
-// Cseréld ki az ID-kat a saját Discord kategóriáid azonosítójára!
 const TICKET_CONFIG = {
     DEFAULT_PARENT: '1527688497593585746', // Alapértelmezett ticket kategória ID
     SORSOLAS_PARENT: '1534568444974862506', // Nyereményjáték kategória ID
-    PARTNER_PARENT: '1534568268956827758'         // Partner kategória ID
+    PARTNER_PARENT: '1534568268956827758'   // Partner kategória ID
 };
 
 // --- ADATBÁZIS CSATLAKOZÁS ---
@@ -69,6 +68,55 @@ function drawWinners(participants, count) {
 
 function updateStatus(guild) {
     if (guild) client.user.setPresence({ activities: [{ name: `👥 ${guild.memberCount} tag | /giveaway`, type: 4 }], status: 'online' });
+}
+
+// TICKET KATEGÓRIA ÁTMOZGATÓ ÉS ÁTNEVEZŐ KÖZÖS FÜGGVÉNY
+async function moveTicketCategory(channel, guild, categoryType) {
+    const targetCategoryId = categoryType === 'sorsolas' 
+        ? TICKET_CONFIG.SORSOLAS_PARENT 
+        : TICKET_CONFIG.PARTNER_PARENT;
+
+    const categoryName = categoryType === 'sorsolas' ? 'Nyereményjáték' : 'Partner';
+    const nameSuffix = categoryType === 'sorsolas' ? 'nyeremeny' : 'partner';
+
+    // Mentsük el a csatornában lévő tagok (pl. ticket nyitója) egyedi jogait
+    const userOverwrites = channel.permissionOverwrites.cache.filter(
+        o => o.id !== guild.id && o.id !== client.user.id
+    );
+
+    // Kategóriában lévő csatornák szűrése a legmagasabb sorszámhoz
+    const channelsInCategory = guild.channels.cache.filter(c => c.parentId === targetCategoryId);
+    let nextNum = 1;
+    if (channelsInCategory.size > 0) {
+        let maxNum = 0;
+        channelsInCategory.forEach(c => {
+            const parts = c.name.split('-');
+            const num = parseInt(parts[parts.length - 1]);
+            if (!isNaN(num) && num > maxNum) maxNum = num;
+        });
+        nextNum = maxNum + 1;
+    }
+
+    // Felhasználónév kiszedése a csatorna eredeti nevéből
+    let rawUser = channel.name.replace(/^ticket-/, '').replace(/-nyeremeny-\d+$/, '').replace(/-partner-\d+$/, '');
+    const cleanUser = rawUser.split('-')[0] || 'user';
+
+    const newName = `${cleanUser}-${nameSuffix}-${nextNum}`;
+
+    // Kategória váltás úgy, hogy az egyedi jogok megmaradjanak
+    await channel.setParent(targetCategoryId, { lockPermissions: false });
+    await channel.setName(newName);
+
+    // Kifejezetten megerősítjük a ticket nyitójának a láthatóságot
+    for (const [overwriteId] of userOverwrites) {
+        await channel.permissionOverwrites.edit(overwriteId, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true
+        }).catch(() => {});
+    }
+
+    return { newName, categoryName };
 }
 
 // SORSOLÓ FÜGGVÉNY
@@ -164,7 +212,9 @@ const commands = [
         .addSubcommand(subcommand => subcommand.setName('reroll').setDescription('Újrasorsolás a megadott számú új nyertesnek').addStringOption(option => option.setName('message_id').setDescription('A giveaway üzenetének az ID-ja').setRequired(true)).addIntegerOption(option => option.setName('winners').setDescription('Hány új nyertest sorsoljunk ki? (Alapértelmezett: 1)').setRequired(false).setMinValue(1)))
         .addSubcommand(subcommand => subcommand.setName('end').setDescription('Egy futó nyereményjáték azonnali leállítása és sorsolása').addStringOption(option => option.setName('message_id').setDescription('A futó giveaway üzenetének ID-ja').setRequired(true))),
     new SlashCommandBuilder().setName('ticket').setDescription('Ticket rendszer parancsok')
-        .addSubcommand(subcommand => subcommand.setName('setup').setDescription('Ticket panel elküldése a jelenlegi csatornába')),
+        .addSubcommand(subcommand => subcommand.setName('setup').setDescription('Ticket panel elküldése a jelenlegi csatornába'))
+        .addSubcommand(subcommand => subcommand.setName('sorsolas').setDescription('Ticket áthelyezése a Nyereményjáték kategóriába'))
+        .addSubcommand(subcommand => subcommand.setName('partner').setDescription('Ticket áthelyezése a Partner kategóriába')),
     new SlashCommandBuilder().setName('invites').setDescription('Meghívók lekérése')
         .addUserOption(option => option.setName('user').setDescription('Kinek a meghívóit szeretnéd megnézni? (Opcionális)'))
 ].map(command => command.toJSON());
@@ -203,121 +253,34 @@ client.on('guildMemberAdd', async (member) => {
 });
 client.on('guildMemberRemove', (member) => updateStatus(member.guild));
 
-// --- CHAT ÜZENETEK FIGYELÉSE (.sorsolas ÉS .partner PARANCSOK) ---
+// --- CHAT ÜZENETEK FIGYELÉSE (.sorsolas ÉS .partner PREFIX PARANCSOK) ---
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.guild) return;
 
     const content = message.content.toLowerCase().trim();
 
-    // SORSOLÁS / NYEREMÉNYJÁTÉK KATEGÓRIÁBA ÁTMOZGATÁS
-    if (content === '.sorsolas') {
+    if (content === '.sorsolas' || content === '.partner') {
+        // Töröljük a beírt parancsot azonnal (ha a botnak van Manage Messages joga)
         await message.delete().catch(() => {});
 
         if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
-            return message.channel.send('❌ Nincs jogosultságod a ticket átmozgatásához!');
+            const replyMsg = await message.channel.send('❌ Nincs jogosultságod a ticket átmozgatásához!');
+            return setTimeout(() => replyMsg.delete().catch(() => {}), 3000);
         }
 
-        const targetCategoryId = TICKET_CONFIG.SORSOLAS_PARENT;
-        if (!targetCategoryId || targetCategoryId.includes('IDE_ÍRD')) {
-            return message.channel.send('❌ Nincs beállítva a nyereményjáték kategória ID a kód elején!');
-        }
-
-        // Mentsük el a csatornában lévő tagok (pl. ticket nyitója) meglévő jogosultságait
-        const memberOverwrites = message.channel.permissionOverwrites.cache.filter(
-            o => o.type === 1 && o.id !== client.user.id
-        );
-
-        const channelsInCategory = message.guild.channels.cache.filter(c => c.parentId === targetCategoryId);
+        const categoryType = content === '.sorsolas' ? 'sorsolas' : 'partner';
         
-        let nextNum = 1;
-        if (channelsInCategory.size > 0) {
-            let maxNum = 0;
-            channelsInCategory.forEach(c => {
-                const parts = c.name.split('-');
-                const num = parseInt(parts[parts.length - 1]);
-                if (!isNaN(num) && num > maxNum) maxNum = num;
-            });
-            nextNum = maxNum + 1;
-        }
-
-        let rawUser = message.channel.name.replace(/^ticket-/, '').replace(/-nyeremeny-\d+$/, '').replace(/-partner-\d+$/, '');
-        const cleanUser = rawUser.split('-')[0] || 'user';
-
-        const newName = `${cleanUser}-nyeremeny-${nextNum}`;
         try {
-            // Kategória váltás úgy, hogy az egyedi jogok megmaradjanak
-            await message.channel.setParent(targetCategoryId, { lockPermissions: false });
-            await message.channel.setName(newName);
+            const result = await moveTicketCategory(message.channel, message.guild, categoryType);
+            const replyMsg = await message.channel.send(`✅ Ticket áthelyezve a **${result.categoryName}** kategóriába! Új név: \`${result.newName}\``);
+            
+            // 3 másodperc múlva letörli a bot a saját visszajelzését is, hogy tiszta maradjon a ticket!
+            setTimeout(() => replyMsg.delete().catch(() => {}), 3000);
 
-            // Kifejezetten megerősítjük a ticket nyitójának a láthatóságot
-            for (const [memberId] of memberOverwrites) {
-                await message.channel.permissionOverwrites.edit(memberId, {
-                    ViewChannel: true,
-                    SendMessages: true,
-                    ReadMessageHistory: true
-                }).catch(() => {});
-            }
-
-            await message.channel.send(`✅ Ticket áthelyezve a **Nyereményjáték** kategóriába! Új név: \`${newName}\``);
         } catch (err) {
             console.error(err);
-            await message.channel.send('❌ Hiba történt az áthelyezés során! Ellenőrizd a kategória ID-t és a bot jogait.');
-        }
-    }
-
-    // PARTNER KATEGÓRIÁBA ÁTMOZGATÁS
-    if (content === '.partner') {
-        await message.delete().catch(() => {});
-
-        if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
-            return message.channel.send('❌ Nincs jogosultságod a ticket átmozgatásához!');
-        }
-
-        const targetCategoryId = TICKET_CONFIG.PARTNER_PARENT;
-        if (!targetCategoryId || targetCategoryId.includes('IDE_ÍRD')) {
-            return message.channel.send('❌ Nincs beállítva a partner kategória ID a kód elején!');
-        }
-
-        // Mentsük el a csatornában lévő tagok (pl. ticket nyitója) meglévő jogosultságait
-        const memberOverwrites = message.channel.permissionOverwrites.cache.filter(
-            o => o.type === 1 && o.id !== client.user.id
-        );
-
-        const channelsInCategory = message.guild.channels.cache.filter(c => c.parentId === targetCategoryId);
-        
-        let nextNum = 1;
-        if (channelsInCategory.size > 0) {
-            let maxNum = 0;
-            channelsInCategory.forEach(c => {
-                const parts = c.name.split('-');
-                const num = parseInt(parts[parts.length - 1]);
-                if (!isNaN(num) && num > maxNum) maxNum = num;
-            });
-            nextNum = maxNum + 1;
-        }
-
-        let rawUser = message.channel.name.replace(/^ticket-/, '').replace(/-nyeremeny-\d+$/, '').replace(/-partner-\d+$/, '');
-        const cleanUser = rawUser.split('-')[0] || 'user';
-
-        const newName = `${cleanUser}-partner-${nextNum}`;
-        try {
-            // Kategória váltás úgy, hogy az egyedi jogok megmaradjanak
-            await message.channel.setParent(targetCategoryId, { lockPermissions: false });
-            await message.channel.setName(newName);
-
-            // Kifejezetten megerősítjük a ticket nyitójának a láthatóságot
-            for (const [memberId] of memberOverwrites) {
-                await message.channel.permissionOverwrites.edit(memberId, {
-                    ViewChannel: true,
-                    SendMessages: true,
-                    ReadMessageHistory: true
-                }).catch(() => {});
-            }
-
-            await message.channel.send(`✅ Ticket áthelyezve a **Partner** kategóriába! Új név: \`${newName}\``);
-        } catch (err) {
-            console.error(err);
-            await message.channel.send('❌ Hiba történt az áthelyezés során! Ellenőrizd a kategória ID-t és a bot jogait.');
+            const replyMsg = await message.channel.send('❌ Hiba történt az áthelyezés során! Ellenőrizd a bot jogait.');
+            setTimeout(() => replyMsg.delete().catch(() => {}), 3000);
         }
     }
 });
@@ -337,13 +300,32 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.reply({ content: `📩 **${user.username}** eddig **${data ? data.invites : 0}** embert hívott meg a szerverre!`, ephemeral: false });
         }
 
-        // TICKET SETUP
+        // TICKET PARANCSOK
         if (interaction.commandName === 'ticket') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return interaction.reply({ content: '❌ Nincs jogosultságod!', ephemeral: true });
-            const ticketEmbed = new EmbedBuilder().setColor('#00f2fe').setTitle('🎫 Ügyfélszolgálat / Ticket Nyitása').setDescription('Kérdésed van, vagy segítségre van szükséged?\nKattints az alábbi gombra, hogy privát csatornát nyiss a csapattal!').setFooter({ text: 'Ticket Rendszer' });
-            const ticketButton = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('open_ticket').setLabel('📩 Ticket Nyitása').setStyle(ButtonStyle.Primary));
-            await interaction.channel.send({ embeds: [ticketEmbed], components: [ticketButton] });
-            return interaction.reply({ content: '✅ Ticket panel létrehozva!', ephemeral: true });
+            const subcommand = interaction.options.getSubcommand();
+
+            if (subcommand === 'setup') {
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return interaction.reply({ content: '❌ Nincs jogosultságod!', ephemeral: true });
+                const ticketEmbed = new EmbedBuilder().setColor('#00f2fe').setTitle('🎫 Ügyfélszolgálat / Ticket Nyitása').setDescription('Kérdésed van, vagy segítségre van szükséged?\nKattints az alábbi gombra, hogy privát csatornát nyiss a csapattal!').setFooter({ text: 'Ticket Rendszer' });
+                const ticketButton = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('open_ticket').setLabel('📩 Ticket Nyitása').setStyle(ButtonStyle.Primary));
+                await interaction.channel.send({ embeds: [ticketEmbed], components: [ticketButton] });
+                return interaction.reply({ content: '✅ Ticket panel létrehozva!', ephemeral: true });
+            }
+
+            // SLASH COMMAND-OKVAL TÖKÉLETESEN EPHEMERAL (CSAK AKI BEÍRTA, AZ LÁTJA!)
+            if (subcommand === 'sorsolas' || subcommand === 'partner') {
+                if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+                    return interaction.reply({ content: '❌ Nincs jogosultságod a ticket átmozgatásához!', ephemeral: true });
+                }
+
+                try {
+                    const result = await moveTicketCategory(interaction.channel, interaction.guild, subcommand);
+                    return interaction.reply({ content: `✅ Ticket áthelyezve a **${result.categoryName}** kategóriába! Új név: \`${result.newName}\``, ephemeral: true });
+                } catch (err) {
+                    console.error(err);
+                    return interaction.reply({ content: '❌ Hiba történt az áthelyezés során!', ephemeral: true });
+                }
+            }
         }
 
         // GIVEAWAY
@@ -462,7 +444,11 @@ client.on('interactionCreate', async (interaction) => {
 
             const ticketChannel = await interaction.guild.channels.create({
                 name: ticketName, type: ChannelType.GuildText, parent: TICKET_CONFIG.DEFAULT_PARENT,
-                permissionOverwrites: [{ id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] }, { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }, { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }]
+                permissionOverwrites: [
+                    { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+                    { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+                    { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
+                ]
             });
 
             const welcomeEmbed = new EmbedBuilder().setColor('#00f2fe').setTitle('🎫 Új Ticket').setDescription(`Üdv, <@${interaction.user.id}>!\nKérjük írd le miben segíthetünk.`);
