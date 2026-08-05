@@ -14,7 +14,6 @@ mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log('✅ Adatbázis sikeresen csatlakoztatva!'))
     .catch(err => console.error('❌ Adatbázis hiba:', err));
 
-// Sémák (Meghívók és Nyereményjátékok)
 const inviteSchema = new mongoose.Schema({ guildId: String, userId: String, invites: Number });
 const Invite = mongoose.model('Invite', inviteSchema);
 
@@ -30,7 +29,7 @@ const giveawaySchema = new mongoose.Schema({
 });
 const Giveaway = mongoose.model('Giveaway', giveawaySchema);
 
-// --- WEB SZERVER A RENDERNEK (Ez tartja ébren az UptimeRobottal) ---
+// --- WEB SZERVER A RENDERNEK ---
 app.get('/', (req, res) => res.send('A bot tökéletesen fut és online!'));
 app.listen(process.env.PORT || 3000, () => console.log('A webes kiszolgáló elindult.'));
 
@@ -64,11 +63,11 @@ function updateStatus(guild) {
     if (guild) client.user.setPresence({ activities: [{ name: `👥 ${guild.memberCount} tag | /giveaway`, type: 4 }], status: 'online' });
 }
 
-// ADATBÁZISOS SORSOLÓ FÜGGVÉNY
+// SORSOLÓ FÜGGVÉNY (SIMA @NEVEK KIÍRÁSÁVAL)
 async function endGiveaway(gwData) {
     try {
         const checkDb = await Giveaway.findOne({ messageId: gwData.messageId });
-        if (!checkDb || checkDb.ended) return; // Ha már lezárult, nem sorsol újra
+        if (!checkDb) return;
 
         const guild = client.guilds.cache.get(gwData.guildId);
         if (!guild) return;
@@ -80,9 +79,20 @@ async function endGiveaway(gwData) {
 
         const reaction = message.reactions.cache.get('🎉');
         let validUsers = [];
+        
+        // MIND A 660+ JELENTKEZŐ BEOLVASÁSA (100-AS CSOPORTOKBAN)
         if (reaction) {
-            const reactedUsers = await reaction.users.fetch();
-            validUsers = reactedUsers.filter(user => !user.bot).map(user => user.id);
+            let lastId;
+            while (true) {
+                const options = { limit: 100 };
+                if (lastId) options.after = lastId;
+                const fetchedUsers = await reaction.users.fetch(options);
+                if (fetchedUsers.size === 0) break;
+                
+                validUsers.push(...fetchedUsers.filter(user => !user.bot).map(user => user.id));
+                lastId = fetchedUsers.last().id;
+                if (fetchedUsers.size < 100) break;
+            }
         }
 
         if (validUsers.length === 0) {
@@ -92,7 +102,7 @@ async function endGiveaway(gwData) {
             await message.edit({ embeds: [noWinnerEmbed] });
             await channel.send({ content: 'A nyereményjáték véget ért, de senki sem jelentkezett.' });
         } else {
-            const members = await guild.members.fetch({ user: validUsers });
+            const members = await guild.members.fetch({ user: validUsers }).catch(() => new Map());
             const participants = validUsers.map(userId => {
                 const member = members.get(userId);
                 const isBooster = member ? member.premiumSince !== null : false;
@@ -101,22 +111,40 @@ async function endGiveaway(gwData) {
             });
 
             const winners = drawWinners(participants, gwData.winnerCount);
-            const winnersMention = winners.map(id => `<@${id}>`).join(', ');
+            const winnersMention = winners.map(id => `<@${id}>`).join(' ');
+
+            // EMBED FRISSÍTÉSE (BIZTONSÁGOS KARAKTERSZÁMMAL)
+            let embedWinnerValue = winnersMention;
+            if (embedWinnerValue.length > 1000) {
+                embedWinnerValue = `🎉 **${winners.length} nyertes kisorsolva!** (Lásd az alábbi üzenetet)`;
+            }
 
             const endEmbed = EmbedBuilder.from(message.embeds[0])
                 .setDescription('A nyereményjáték lezárult!')
-                .addFields({ name: 'Nyertes(ek)', value: winnersMention, inline: false });
+                .addFields({ name: 'Nyertes(ek)', value: embedWinnerValue, inline: false });
 
             await message.edit({ embeds: [endEmbed] });
 
-            let congratulationText = winners.length > 1 
-                ? `🎉 Gratulálok ${winnersMention}! A nyereményetek: **${gwData.prize}/fő**! 🎉`
-                : `🎉 Gratulálok ${winnersMention}! A nyereményed: **${gwData.prize}**! 🎉`;
-            
-            await channel.send({ content: congratulationText });
+            // NYERTESEK KIÍRÁSA A CHATBE (SIMA @NEVEK)
+            if (winnersMention.length <= 2000) {
+                await channel.send({ content: winnersMention });
+            } else {
+                // HA ESETLEG 2000 CHAR FELETT LENNENEK A MEG JELÖLÉSEK, TÖBB ÜZENETRE BONTJA
+                let currentMsg = "";
+                for (const winnerId of winners) {
+                    const mention = `<@${winnerId}> `;
+                    if ((currentMsg + mention).length > 1900) {
+                        await channel.send({ content: currentMsg });
+                        currentMsg = "";
+                    }
+                    currentMsg += mention;
+                }
+                if (currentMsg.length > 0) {
+                    await channel.send({ content: currentMsg });
+                }
+            }
         }
         
-        // Adatbázisban beállítjuk lezártnak
         checkDb.ended = true;
         await checkDb.save();
 
@@ -137,22 +165,21 @@ const commands = [
         .addUserOption(option => option.setName('user').setDescription('Kinek a meghívóit szeretnéd megnézni? (Opcionális)'))
 ].map(command => command.toJSON());
 
-// --- BOT INDÍTÁSA (ÉS SORSOLÁSOK FOLYTATÁSA) ---
+// --- BOT INDÍTÁSA ---
 client.once('ready', async () => {
     console.log(`Sikeresen bejelentkezve mint ${client.user.tag}!`);
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
     updateStatus(client.guilds.cache.first());
 
-    // Félbemaradt nyereményjátékok visszatöltése memóriába bot induláskor!
     const activeGiveaways = await Giveaway.find({ ended: false });
     const now = Date.now();
     for (const gw of activeGiveaways) {
         const remainingTime = gw.endTime - now;
         if (remainingTime <= 0) {
-            endGiveaway(gw); // Ha már lejárt, amíg offline volt a bot, azonnal sorsol!
+            endGiveaway(gw);
         } else {
-            setTimeout(() => endGiveaway(gw), remainingTime); // Ha még van idő, folytatja!
+            setTimeout(() => endGiveaway(gw), remainingTime);
         }
     }
 });
@@ -215,7 +242,6 @@ client.on('interactionCreate', async (interaction) => {
                 const message = await interaction.reply({ embeds: [giveawayEmbed], fetchReply: true });
                 await message.react('🎉');
 
-                // Mentjük a nyereményjátékot az adatbázisba!
                 const newGiveaway = new Giveaway({ messageId: message.id, channelId: interaction.channelId, guildId: interaction.guildId, endTime: Date.now() + durationMs, prize: prize, winnerCount: winnerCount, boosterBonus: boosterBonus });
                 await newGiveaway.save();
 
@@ -225,37 +251,12 @@ client.on('interactionCreate', async (interaction) => {
             if (subcommand === 'reroll') {
                 const messageId = interaction.options.getString('message_id');
                 await interaction.deferReply({ ephemeral: true });
-                try {
-                    const targetMessage = await interaction.channel.messages.fetch(messageId);
-                    if (!targetMessage.embeds || targetMessage.embeds.length === 0 || !targetMessage.embeds[0].title.includes('Nyereményjáték')) return interaction.editReply({ content: '❌ Nem érvényes nyereményjáték üzenet!' });
-                    const reaction = targetMessage.reactions.cache.get('🎉');
-                    let validUsers = [];
-                    if (reaction) validUsers = (await reaction.users.fetch()).filter(user => !user.bot).map(user => user.id);
-                    if (validUsers.length === 0) return interaction.editReply({ content: '❌ Nincs érvényes jelentkező.' });
-                    
-                    const oldEmbed = targetMessage.embeds[0];
-                    const prize = oldEmbed.fields.find(f => f.name === 'Nyeremény')?.value || 'Ismeretlen nyeremény';
-                    const winnerCount = parseInt(oldEmbed.fields.find(f => f.name === 'Nyertesek száma')?.value || 1);
-                    const boosterBonus = parseInt(oldEmbed.fields.find(f => f.name === '💎 Booster Bónusz')?.value?.replace(/\D/g, '') || 0);
-
-                    const members = await targetMessage.guild.members.fetch({ user: validUsers });
-                    const participants = validUsers.map(userId => {
-                        const member = members.get(userId);
-                        return { id: userId, weight: (member && member.premiumSince !== null) ? (100 + boosterBonus) : 100 };
-                    });
-
-                    const winners = drawWinners(participants, winnerCount);
-                    const winnersMention = winners.map(id => `<@${id}>`).join(', ');
-                    
-                    const rerollEmbed = EmbedBuilder.from(oldEmbed);
-                    const winnerFieldIndex = rerollEmbed.data.fields.findIndex(f => f.name === 'Nyertes(ek)');
-                    if (winnerFieldIndex !== -1) rerollEmbed.data.fields[winnerFieldIndex].value = winnersMention;
-                    else rerollEmbed.addFields({ name: 'Nyertes(ek)', value: winnersMention, inline: false });
-
-                    await targetMessage.edit({ embeds: [rerollEmbed] });
-                    await interaction.channel.send({ content: `🎲 **Újrasorsolás!** Gratulálok ${winnersMention}! A nyeremény: **${prize}**! 🎉` });
-                    await interaction.editReply({ content: '✅ Az újrasorsolás sikeresen lefutott!' });
-                } catch (error) { return interaction.editReply({ content: '❌ Hiba történt.' }); }
+                const gwData = await Giveaway.findOne({ messageId: messageId });
+                if (!gwData) return interaction.editReply({ content: '❌ Nem található nyereményjáték ezzel az ID-val!' });
+                
+                gwData.ended = false;
+                await endGiveaway(gwData);
+                await interaction.editReply({ content: '✅ Az újrasorsolás sikeresen megtörtént!' });
             }
 
             if (subcommand === 'end') {
@@ -264,8 +265,8 @@ client.on('interactionCreate', async (interaction) => {
                 const gwData = await Giveaway.findOne({ messageId: messageId });
                 
                 if (!gwData) return interaction.editReply({ content: '❌ Ezt a játékot nem találom az adatbázisban!' });
-                if (gwData.ended) return interaction.editReply({ content: '❌ Ez a nyereményjáték már lezárult!' });
 
+                gwData.ended = false;
                 await endGiveaway(gwData);
                 await interaction.editReply({ content: '✅ A nyereményjáték sorsolása megtörtént!' });
             }
