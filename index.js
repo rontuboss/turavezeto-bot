@@ -63,7 +63,7 @@ function updateStatus(guild) {
     if (guild) client.user.setPresence({ activities: [{ name: `👥 ${guild.memberCount} tag | /giveaway`, type: 4 }], status: 'online' });
 }
 
-// SORSOLÓ FÜGGVÉNY (SIMA @NEVEK KIÍRÁSÁVAL)
+// SORSOLÓ FÜGGVÉNY (ALAPÉRTELMEZETT LEZÁRÁSHOZ)
 async function endGiveaway(gwData) {
     try {
         const checkDb = await Giveaway.findOne({ messageId: gwData.messageId });
@@ -80,7 +80,6 @@ async function endGiveaway(gwData) {
         const reaction = message.reactions.cache.get('🎉');
         let validUsers = [];
         
-        // MIND A 660+ JELENTKEZŐ BEOLVASÁSA (100-AS CSOPORTOKBAN)
         if (reaction) {
             let lastId;
             while (true) {
@@ -113,7 +112,6 @@ async function endGiveaway(gwData) {
             const winners = drawWinners(participants, gwData.winnerCount);
             const winnersMention = winners.map(id => `<@${id}>`).join(' ');
 
-            // EMBED FRISSÍTÉSE (BIZTONSÁGOS KARAKTERSZÁMMAL)
             let embedWinnerValue = winnersMention;
             if (embedWinnerValue.length > 1000) {
                 embedWinnerValue = `🎉 **${winners.length} nyertes kisorsolva!** (Lásd az alábbi üzenetet)`;
@@ -125,11 +123,9 @@ async function endGiveaway(gwData) {
 
             await message.edit({ embeds: [endEmbed] });
 
-            // NYERTESEK KIÍRÁSA A CHATBE (SIMA @NEVEK)
             if (winnersMention.length <= 2000) {
                 await channel.send({ content: winnersMention });
             } else {
-                // HA ESETLEG 2000 CHAR FELETT LENNENEK A MEG JELÖLÉSEK, TÖBB ÜZENETRE BONTJA
                 let currentMsg = "";
                 for (const winnerId of winners) {
                     const mention = `<@${winnerId}> `;
@@ -157,7 +153,7 @@ async function endGiveaway(gwData) {
 const commands = [
     new SlashCommandBuilder().setName('giveaway').setDescription('Nyereményjáték parancsok')
         .addSubcommand(subcommand => subcommand.setName('start').setDescription('Nyereményjáték indítása').addStringOption(option => option.setName('duration').setDescription('Időtartam (pl: 10s, 5m, 2h, 1d)').setRequired(true)).addStringOption(option => option.setName('prize').setDescription('Mi a nyeremény?').setRequired(true)).addIntegerOption(option => option.setName('winners').setDescription('Hány nyertes legyen?').setRequired(true).setMinValue(1)).addIntegerOption(option => option.setName('booster_bonus').setDescription('Hány %-kal legyen több esélye a Boostereknek? (Opcionális)').setMinValue(1)))
-        .addSubcommand(subcommand => subcommand.setName('reroll').setDescription('Újrasorsolás egy korábbi játékhoz az üzenet ID-ja alapján').addStringOption(option => option.setName('message_id').setDescription('A giveaway üzenetének az ID-ja').setRequired(true)))
+        .addSubcommand(subcommand => subcommand.setName('reroll').setDescription('Újrasorsolás a megadott számú új nyertesnek').addStringOption(option => option.setName('message_id').setDescription('A giveaway üzenetének az ID-ja').setRequired(true)).addIntegerOption(option => option.setName('winners').setDescription('Hány új nyertest sorsoljunk ki? (Alapértelmezett: 1)').setRequired(false).setMinValue(1)))
         .addSubcommand(subcommand => subcommand.setName('end').setDescription('Egy futó nyereményjáték azonnali leállítása és sorsolása').addStringOption(option => option.setName('message_id').setDescription('A futó giveaway üzenetének ID-ja').setRequired(true))),
     new SlashCommandBuilder().setName('ticket').setDescription('Ticket rendszer parancsok')
         .addSubcommand(subcommand => subcommand.setName('setup').setDescription('Ticket panel elküldése a jelenlegi csatornába')),
@@ -250,13 +246,71 @@ client.on('interactionCreate', async (interaction) => {
 
             if (subcommand === 'reroll') {
                 const messageId = interaction.options.getString('message_id');
+                const rerollCount = interaction.options.getInteger('winners') || 1;
                 await interaction.deferReply({ ephemeral: true });
+
                 const gwData = await Giveaway.findOne({ messageId: messageId });
-                if (!gwData) return interaction.editReply({ content: '❌ Nem található nyereményjáték ezzel az ID-val!' });
+                if (!gwData) return interaction.editReply({ content: '❌ Nem található nyereményjáték ezzel az ID-val az adatbázisban!' });
+
+                const channel = interaction.guild.channels.cache.get(gwData.channelId);
+                if (!channel) return interaction.editReply({ content: '❌ Nem található a csatorna!' });
+
+                const message = await channel.messages.fetch(gwData.messageId).catch(() => null);
+                if (!message) return interaction.editReply({ content: '❌ Nem található a nyereményjáték üzenet!' });
+
+                const reaction = message.reactions.cache.get('🎉');
+                let validUsers = [];
+
+                if (reaction) {
+                    let lastId;
+                    while (true) {
+                        const options = { limit: 100 };
+                        if (lastId) options.after = lastId;
+                        const fetchedUsers = await reaction.users.fetch(options);
+                        if (fetchedUsers.size === 0) break;
+                        
+                        validUsers.push(...fetchedUsers.filter(user => !user.bot).map(user => user.id));
+                        lastId = fetchedUsers.last().id;
+                        if (fetchedUsers.size < 100) break;
+                    }
+                }
+
+                if (validUsers.length === 0) return interaction.editReply({ content: '❌ Nincs érvényes jelentkező!' });
+
+                const members = await interaction.guild.members.fetch({ user: validUsers }).catch(() => new Map());
+                const participants = validUsers.map(userId => {
+                    const member = members.get(userId);
+                    const isBooster = member ? member.premiumSince !== null : false;
+                    const weight = isBooster ? (100 + gwData.boosterBonus) : 100;
+                    return { id: userId, weight: weight };
+                });
+
+                const winners = drawWinners(participants, rerollCount);
+                if (winners.length === 0) return interaction.editReply({ content: '❌ Nem sikerült nyertest sorsolni.' });
+
+                const winnersMention = winners.map(id => `<@${id}>`).join(' ');
+
+                const header = `🎲 **Újrasorsolás (${winners.length} új nyertes)!** A nyeremény: **${gwData.prize}**! 🎉\n\n`;
                 
-                gwData.ended = false;
-                await endGiveaway(gwData);
-                await interaction.editReply({ content: '✅ Az újrasorsolás sikeresen megtörtént!' });
+                if ((header + winnersMention).length <= 2000) {
+                    await channel.send({ content: header + winnersMention });
+                } else {
+                    await channel.send({ content: header });
+                    let currentMsg = "";
+                    for (const winnerId of winners) {
+                        const mention = `<@${winnerId}> `;
+                        if ((currentMsg + mention).length > 1900) {
+                            await channel.send({ content: currentMsg });
+                            currentMsg = "";
+                        }
+                        currentMsg += mention;
+                    }
+                    if (currentMsg.length > 0) {
+                        await channel.send({ content: currentMsg });
+                    }
+                }
+
+                return interaction.editReply({ content: `✅ Sikeresen kisorsoltál ${winners.length} új nyertest!` });
             }
 
             if (subcommand === 'end') {
