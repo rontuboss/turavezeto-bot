@@ -18,7 +18,9 @@ const TICKET_CONFIG = {
     ],
     PARTNER_PARENTS: [
         '1534568268956827758'  // Partner kategória
-    ]
+    ],
+    // Csak ez a rang (*) használhatja a .sorsolas / .partner / .sima parancsokat
+    ADMIN_ROLE_ID: '1436671411178569832'
 };
 
 // --- ADATBÁZIS CSATLAKOZÁS ---
@@ -75,6 +77,15 @@ function updateStatus(guild) {
     if (guild) client.user.setPresence({ activities: [{ name: `👥 ${guild.memberCount} tag | /giveaway`, type: 4 }], status: 'online' });
 }
 
+// Segédfüggvény: felhasználónév kiszedése a csatorna nevéből (bármelyik forma)
+function extractCleanUsername(channelName) {
+    return channelName
+        .replace(/^ticket-/, '')
+        .replace(/-nyeremeny-\d+$/, '')
+        .replace(/-partner-\d+$/, '')
+        .split('-')[0] || 'user';
+}
+
 // CSENDES AUTOMATA CSATORNA RENDEZŐ ÉS SORSZÁM JAVÍTÓ FÜGGVÉNY
 async function auditAndFixCategories(guild, categoryType) {
     const parentIds = categoryType === 'sorsolas' 
@@ -95,7 +106,7 @@ async function auditAndFixCategories(guild, categoryType) {
         const ch = sortedChannels[i];
         const correctNumber = i + 1;
 
-        // Kiszámoljuk, melyik kategóriába kell tartoznia (0-49 -> 1. kat, 50-99 -> 2. kat stb.)
+        // Kiszámoljuk, melyik kategóriába kell tartoznia (1-50 -> 1. kat, 51-100 -> 2. kat stb.)
         const targetCategoryIndex = Math.floor(i / 50);
         let targetCatId = parentIds[targetCategoryIndex];
 
@@ -116,8 +127,7 @@ async function auditAndFixCategories(guild, categoryType) {
         }
 
         // Felhasználónév tisztítása
-        let rawUser = ch.name.replace(/^ticket-/, '').replace(new RegExp(`-${nameSuffix}-\\d+$`), '');
-        const cleanUser = rawUser.split('-')[0] || 'user';
+        const cleanUser = extractCleanUsername(ch.name);
         const expectedName = `${cleanUser}-${nameSuffix}-${correctNumber}`;
 
         // Áthelyezés ha rossz kategóriában van
@@ -172,6 +182,45 @@ async function moveTicketCategory(channel, guild, categoryType) {
     }, 1000);
 
     return { categoryName };
+}
+
+// TICKET VISSZAHELYEZÉSE AZ ALAP (SIMA) KATEGÓRIÁBA
+async function moveTicketToDefault(channel, guild) {
+    const oldParentId = channel.parentId;
+
+    // Megőrizzük a ticket nyitójának egyedi jogait
+    const userOverwrites = channel.permissionOverwrites.cache.filter(
+        o => o.id !== guild.id && o.id !== client.user.id
+    );
+
+    const cleanUser = extractCleanUsername(channel.name);
+    const newName = `ticket-${cleanUser}`;
+
+    await channel.setParent(TICKET_CONFIG.DEFAULT_PARENT, { lockPermissions: false });
+    await channel.setName(newName);
+
+    // Jogosultságok megerősítése
+    for (const [overwriteId] of userOverwrites) {
+        await channel.permissionOverwrites.edit(overwriteId, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true
+        }).catch(() => {});
+    }
+
+    // Ha korábban egy sorsolás/partner kategóriában volt, javítsuk ki az ott maradt sorszámokat,
+    // hogy ne maradjon lyuk a számozásban
+    let auditType = null;
+    if (TICKET_CONFIG.SORSOLAS_PARENTS.includes(oldParentId)) auditType = 'sorsolas';
+    else if (TICKET_CONFIG.PARTNER_PARENTS.includes(oldParentId)) auditType = 'partner';
+
+    if (auditType) {
+        setTimeout(() => {
+            auditAndFixCategories(guild, auditType).catch(err => console.error("Audit hiba:", err));
+        }, 1000);
+    }
+
+    return { newName };
 }
 
 // SORSOLÓ FÜGGVÉNY
@@ -269,7 +318,8 @@ const commands = [
     new SlashCommandBuilder().setName('ticket').setDescription('Ticket rendszer parancsok')
         .addSubcommand(subcommand => subcommand.setName('setup').setDescription('Ticket panel elküldése a jelenlegi csatornába'))
         .addSubcommand(subcommand => subcommand.setName('sorsolas').setDescription('Ticket áthelyezése a Nyereményjáték kategóriába'))
-        .addSubcommand(subcommand => subcommand.setName('partner').setDescription('Ticket áthelyezése a Partner kategóriába')),
+        .addSubcommand(subcommand => subcommand.setName('partner').setDescription('Ticket áthelyezése a Partner kategóriába'))
+        .addSubcommand(subcommand => subcommand.setName('sima').setDescription('Ticket visszahelyezése az alap kategóriába')),
     new SlashCommandBuilder().setName('invites').setDescription('Meghívók lekérése')
         .addUserOption(option => option.setName('user').setDescription('Kinek a meghívóit szeretnéd megnézni? (Opcionális)'))
 ].map(command => command.toJSON());
@@ -308,27 +358,31 @@ client.on('guildMemberAdd', async (member) => {
 });
 client.on('guildMemberRemove', (member) => updateStatus(member.guild));
 
-// --- CHAT ÜZENETEK FIGYELÉSE (.sorsolas ÉS .partner PREFIX PARANCSOK) ---
+// --- CHAT ÜZENETEK FIGYELÉSE (.sorsolas, .partner ÉS .sima PREFIX PARANCSOK) ---
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.guild) return;
 
     const content = message.content.toLowerCase().trim();
 
-    if (content === '.sorsolas' || content === '.partner') {
+    if (content === '.sorsolas' || content === '.partner' || content === '.sima') {
         await message.delete().catch(() => {});
 
-        if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+        if (!message.member.roles.cache.has(TICKET_CONFIG.ADMIN_ROLE_ID)) {
             const replyMsg = await message.channel.send('❌ Nincs jogosultságod a ticket átmozgatásához!');
             return setTimeout(() => replyMsg.delete().catch(() => {}), 4000);
         }
 
-        const categoryType = content === '.sorsolas' ? 'sorsolas' : 'partner';
-        
         try {
-            const result = await moveTicketCategory(message.channel, message.guild, categoryType);
-            const replyMsg = await message.channel.send(`✅ Ticket sikeresen áthelyezve a **${result.categoryName}** kategóriába!`);
-            setTimeout(() => replyMsg.delete().catch(() => {}), 4000);
-
+            if (content === '.sima') {
+                const result = await moveTicketToDefault(message.channel, message.guild);
+                const replyMsg = await message.channel.send(`✅ Ticket visszahelyezve az alap kategóriába! Új név: \`${result.newName}\``);
+                setTimeout(() => replyMsg.delete().catch(() => {}), 4000);
+            } else {
+                const categoryType = content === '.sorsolas' ? 'sorsolas' : 'partner';
+                const result = await moveTicketCategory(message.channel, message.guild, categoryType);
+                const replyMsg = await message.channel.send(`✅ Ticket sikeresen áthelyezve a **${result.categoryName}** kategóriába!`);
+                setTimeout(() => replyMsg.delete().catch(() => {}), 4000);
+            }
         } catch (err) {
             console.error(err);
             const replyMsg = await message.channel.send(`❌ Hiba történt: ${err.message || 'Ellenőrizd a bot jogait!'}`);
@@ -364,14 +418,19 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.reply({ content: '✅ Ticket panel létrehozva!', ephemeral: true });
             }
 
-            if (subcommand === 'sorsolas' || subcommand === 'partner') {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+            if (subcommand === 'sorsolas' || subcommand === 'partner' || subcommand === 'sima') {
+                if (!interaction.member.roles.cache.has(TICKET_CONFIG.ADMIN_ROLE_ID)) {
                     return interaction.reply({ content: '❌ Nincs jogosultságod a ticket átmozgatásához!', ephemeral: true });
                 }
 
                 try {
-                    const result = await moveTicketCategory(interaction.channel, interaction.guild, subcommand);
-                    return interaction.reply({ content: `✅ Ticket sikeresen áthelyezve a **${result.categoryName}** kategóriába!`, ephemeral: true });
+                    if (subcommand === 'sima') {
+                        const result = await moveTicketToDefault(interaction.channel, interaction.guild);
+                        return interaction.reply({ content: `✅ Ticket visszahelyezve az alap kategóriába! Új név: \`${result.newName}\``, ephemeral: true });
+                    } else {
+                        const result = await moveTicketCategory(interaction.channel, interaction.guild, subcommand);
+                        return interaction.reply({ content: `✅ Ticket sikeresen áthelyezve a **${result.categoryName}** kategóriába!`, ephemeral: true });
+                    }
                 } catch (err) {
                     console.error(err);
                     return interaction.reply({ content: `❌ Hiba történt: ${err.message || 'Ellenőrizd a bot jogait!'}`, ephemeral: true });
