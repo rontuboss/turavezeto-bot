@@ -560,9 +560,12 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.commandName === 'mines') {
+            await i.deferReply(); // <--- EZ TILTJA LE A 10062-ES HIBÁT!
+
             const bet = i.options.getInteger('bet');
             const bombs = i.options.getInteger('bombs');
-            if (userDb.balance < bet) return i.reply({ content: '❌ Nincs elég egyenleged a játék elindításához!', ephemeral: true });
+
+            if (userDb.balance < bet) return i.editReply({ content: '❌ Nincs elég egyenleged a játék elindításához!' });
 
             userDb.balance -= bet;
             await userDb.save();
@@ -578,7 +581,8 @@ client.on('interactionCreate', async (i) => {
             const embed = createMinesEmbed(bet, bombs, 0, 1.00, bet);
             const rows = buildMinesComponents(game);
 
-            const msg = await i.reply({ embeds: [embed], components: rows, fetchReply: true });
+            // Itt az i.reply helyett i.editReply kell, mert előtte már defereltük!
+            const msg = await i.editReply({ embeds: [embed], components: rows });
             game.msgId = msg.id;
             activeMines.set(msg.id, game);
             return;
