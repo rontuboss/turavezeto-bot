@@ -511,7 +511,6 @@ client.on('interactionCreate', async (i) => {
             return i.reply({ content: jobs[Math.floor(Math.random() * jobs.length)] });
         }
 
-        // --- TREASURE (KINCSEK) PARANCS ---
         if (i.commandName === 'treasure') {
             const now = Date.now();
             const isBooster = i.member?.roles?.cache?.has(CONFIG.BOOSTER_ROLE);
@@ -522,20 +521,14 @@ client.on('interactionCreate', async (i) => {
                 return i.reply({ content: `⏳ Még várnod kell **${remaining} percet** a következő kincsig!${isBooster ? ' (💎 Booster kedvezmény: 7 perc cooldown)' : ''}`, ephemeral: true });
             }
 
-            // 5% esély a szuper ládára (250k jackpot)
-            const isSuperChest = Math.random() < 0.05;
-            // Minimum 20.000 Ft, maximum 48.000 Ft (kb. 60%-kal megnövelt sima nyeremények)
-            const amount = isSuperChest ? 250000 : Math.floor(Math.random() * 28001) + 20000;
-
+            const isSuperChest = Math.random() < 0.01;
+            const amount = isSuperChest ? 100000 : Math.floor(Math.random() * 29001) + 1000;
             userDb.balance += amount;
             userDb.lastTreasure = now;
             await userDb.save();
 
-            if (isSuperChest) {
-                return i.reply({ content: `✨ **SZUPER LÁDA JACKPOT!** ✨ Ritka kincset találtál: **${formatFt(amount)}** íródott jóvá az egyenlegeden! 🎉` });
-            } else {
-                return i.reply({ content: `🪙 Kinyitottad a ládát és találtál benne: **${formatFt(amount)}**-ot!` });
-            }
+            if (isSuperChest) return i.reply({ content: `✨ **SZUPER LÁDA!** ✨ Ritka kincset találtál: **${formatFt(amount)}** íródott jóvá az egyenlegeden! 🎉` });
+            return i.reply({ content: `🪙 Kinyitottad a ládát és találtál benne: **${formatFt(amount)}**-ot!` });
         }
 
         if (i.commandName === 'bal') {
@@ -567,11 +560,9 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.commandName === 'mines') {
-            await i.deferReply(); // Letiltja a 10062-es hibát
-
             const bet = i.options.getInteger('bet');
             const bombs = i.options.getInteger('bombs');
-            if (userDb.balance < bet) return i.editReply({ content: '❌ Nincs elég egyenleged a játék elindításához!' });
+            if (userDb.balance < bet) return i.reply({ content: '❌ Nincs elég egyenleged a játék elindításához!', ephemeral: true });
 
             userDb.balance -= bet;
             await userDb.save();
@@ -587,7 +578,7 @@ client.on('interactionCreate', async (i) => {
             const embed = createMinesEmbed(bet, bombs, 0, 1.00, bet);
             const rows = buildMinesComponents(game);
 
-            const msg = await i.editReply({ embeds: [embed], components: rows });
+            const msg = await i.reply({ embeds: [embed], components: rows, fetchReply: true });
             game.msgId = msg.id;
             activeMines.set(msg.id, game);
             return;
@@ -620,7 +611,7 @@ client.on('interactionCreate', async (i) => {
                 await i.deleteReply().catch(() => {});
                 setTimeout(() => msg.edit({ embeds: [new EmbedBuilder().setColor('#ffaa00').setTitle('🤡 CSAK VICCELTEM!').setDescription(`**<@${user.id}>** nem lett kitiltva, maradhatsz! 🎉`)] }).catch(() => {}), 3000);
             } else if (i.commandName === 'nitro') {
-                const embed = new EmbedBuilder().setColor('#5865F2').setTitle('🎁 Discord Nitro Gift!').setDescription('Nyertél 1 hónap Discord Nitro-t! Kattints az alábbi gombra az átvételhez!').setThumbnail('https://i.imgur.com/264293f.png');
+                const embed = new EmbedBuilder().setColor('#5865F2').setTitle('🎁 Discord Nitro Gift!').setDescription('Nyertél 1 hónap Discord Nitro-t! Kattints az alábbi gombra az átvételhez!').setThumbnail('[https://i.imgur.com/264293f.png](https://i.imgur.com/264293f.png)');
                 const btn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_fake_nitro').setLabel('🎁 Claim Nitro').setStyle(ButtonStyle.Success));
                 await i.channel.send({ embeds: [embed], components: [btn] });
                 await i.deleteReply().catch(() => {});
