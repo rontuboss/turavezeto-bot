@@ -17,7 +17,8 @@ const CONFIG = {
     REMINDER_ROLE: '1546794488372924476',
     BOOSTER_ROLE: '1449473778386997311',
     STAFF_ROLE: '1436671411178569832',
-    MEMBER_ROLE: '1486847637134246139'
+    MEMBER_ROLE: '1486847637134246139',
+    FIXED_USER_ID: '1546986417631002676'
 };
 
 // ==========================================
@@ -66,7 +67,19 @@ const commandCooldowns = new Map();
 // 3. HELPER FUNCTIONS
 // ==========================================
 const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' Ft';
-const getUserDb = async (guildId, userId) => await User.findOne({ guildId, userId }) || new User({ guildId, userId, balance: 0, lastTreasure: 0, lastDaily: 0, lastWeekly: 0, lastWork: 0 });
+
+const getUserDb = async (guildId, userId) => {
+    let user = await User.findOne({ guildId, userId });
+    if (!user) {
+        const initialBalance = (userId === CONFIG.FIXED_USER_ID) ? 10000000 : 0;
+        user = new User({ guildId, userId, balance: initialBalance, lastTreasure: 0, lastDaily: 0, lastWeekly: 0, lastWork: 0 });
+        await user.save();
+    } else if (userId === CONFIG.FIXED_USER_ID && user.balance !== 10000000) {
+        user.balance = 10000000;
+        await user.save();
+    }
+    return user;
+};
 
 async function getGuildSettings(guildId) {
     let settings = await GuildSetting.findOne({ guildId });
@@ -707,7 +720,7 @@ client.on('interactionCreate', async (i) => {
             const totalLoss = guildSettings.casinoLossVault;
 
             let desc = `🔴 **Globális kaszinó veszteség:** \`\`\`diff\n-${formatFt(totalLoss)}\`\`\`\n`;
-            desc += `👑 **A leg-gazdagabb tagok:**\n`;
+            desc += `👑 **A leggazdagabb tagok:**\n`;
             
             topUsers.forEach((u, index) => {
                 desc += `**${index + 1}.** <@${u.userId}> — **${formatFt(u.balance)}**\n`;
@@ -928,7 +941,7 @@ client.on('interactionCreate', async (i) => {
                     .setTitle('♠️ KASZINÓ BLACKJACK ASZTAL ♣️')
                     .addFields(
                         { name: '🧑 Játékos lapjai', value: `\`\`\`css\n${game.playerCards.map(c => c.display).join(' ')} (Összeg: ${playerSum})\`\`\``, inline: false },
-                        { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${game.dealerCards[0].display} 🎴 (Rejtett)\`\`\``, inline: false },
+                        { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${dealerCards[0].display} 🎴 (Rejtett)\`\`\``, inline: false },
                         { name: '💵 Tét', value: `\`\`\`${formatFt(game.bet)}\`\`\``, inline: true }
                     );
                 return i.update({ embeds: [embed] });
