@@ -44,6 +44,7 @@ const client = new Client({
 
 // MEMÓRIA TÁROLÓK
 const activeMines = new Map();
+const activeBlackjack = new Map();
 const commandCooldowns = new Map();
 
 // --- SEGÉDFÜGGVÉNYEK ---
@@ -64,7 +65,7 @@ function drawWinners(participants, count) {
     return winners;
 }
 
-const updateStatus = (g) => g && client.user.setPresence({ activities: [{ name: `👥 ${g.memberCount} tag | /mines`, type: 4 }], status: 'online' });
+const updateStatus = (g) => g && client.user.setPresence({ activities: [{ name: `👥 ${g.memberCount} tag | /blackjack`, type: 4 }], status: 'online' });
 
 // --- TICKET AUDIT ÉS RENDEZÉS ---
 async function auditAndFixCategories(guild, categoryType) {
@@ -130,6 +131,32 @@ async function moveTicketCategory(channel, guild, type) {
     for (const [id] of userOverwrites) await channel.permissionOverwrites.edit(id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true }).catch(() => {});
     setTimeout(() => auditAndFixCategories(guild, type), 1000);
     return { categoryName: type === 'sorsolas' ? 'Nyereményjáték' : 'Partner' };
+}
+
+// --- BLACKJACK SEGÉDFÜGGVÉNYEK ---
+const CARD_SUITS = ['♠️', '♥️', '♦️', '♣️'];
+const CARD_VALUES = [
+    { name: '2', value: 2 }, { name: '3', value: 3 }, { name: '4', value: 4 }, 
+    { name: '5', value: 5 }, { name: '6', value: 6 }, { name: '7', value: 7 }, 
+    { name: '8', value: 8 }, { name: '9', value: 9 }, { name: '10', value: 10 }, 
+    { name: 'J', value: 10 }, { name: 'Q', value: 10 }, { name: 'K', value: 10 }, 
+    { name: 'A', value: 11 }
+];
+
+function getRandomCard() {
+    const suit = CARD_SUITS[Math.floor(Math.random() * CARD_SUITS.length)];
+    const cardObj = CARD_VALUES[Math.floor(Math.random() * CARD_VALUES.length)];
+    return { display: `${cardObj.name}${suit}`, value: cardObj.value };
+}
+
+function calculateHand(cards) {
+    let sum = cards.reduce((acc, c) => acc + c.value, 0);
+    let aces = cards.filter(c => c.value === 11).length;
+    while (sum > 21 && aces > 0) {
+        sum -= 10;
+        aces--;
+    }
+    return sum;
 }
 
 // --- MINES SZORZÓ SZÁMÍTÁS ---
@@ -295,6 +322,7 @@ const commands = [
     new SlashCommandBuilder().setName('utalas').setDescription('Pénz küldése másnak').addUserOption(o => o.setName('user').setDescription('Kinek?').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('Összeg (Ft)').setRequired(true).setMinValue(1)),
     new SlashCommandBuilder().setName('top').setDescription('A szerver leggazdagabb tagjai'),
     new SlashCommandBuilder().setName('mines').setDescription('Aknakereső kaszinó minijáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)).addIntegerOption(o => o.setName('bombs').setDescription('Bombák száma (1-19)').setRequired(true).setMinValue(1).setMaxValue(19)),
+    new SlashCommandBuilder().setName('blackjack').setDescription('Klasszikus 21-es blackjack kártyajáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)),
     new SlashCommandBuilder().setName('iq').setDescription('IQ teszt mérés').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
     new SlashCommandBuilder().setName('meret').setDescription('Faszméret mérés').addUserOption(o => o.setName('user').setDescription('Kinek a mérete?'))
 ].map(c => c.toJSON());
@@ -368,7 +396,7 @@ client.on('interactionCreate', async (i) => {
         const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE);
         const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
 
-        const allowedForMembers = ['mines', 'iq', 'meret', 'treasure', 'daily', 'work', 'bal', 'utalas', 'top', 'invites'];
+        const allowedForMembers = ['mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'work', 'bal', 'utalas', 'top', 'invites'];
 
         if (!isMember) {
             return i.reply({ content: '❌ Nincs meg a szükséges rangod a parancsok használatához!', ephemeral: true });
@@ -392,19 +420,78 @@ client.on('interactionCreate', async (i) => {
             commandCooldowns.set(cooldownKey, Date.now());
         }
 
-        // --- DAILY PARANCS (100k, éjféli reset) ---
+        // --- BLACKJACK INDÍTÁS ---
+        if (i.commandName === 'blackjack') {
+            const bet = i.options.getInteger('bet');
+            if (userDb.balance < bet) return i.reply({ content: '❌ Nincs elég egyenleged ehhez a téthez!', ephemeral: true });
+
+            userDb.balance -= bet;
+            await userDb.save();
+
+            const playerCards = [getRandomCard(), getRandomCard()];
+            const dealerCards = [getRandomCard(), getRandomCard()];
+
+            const playerSum = calculateHand(playerCards);
+            const dealerSum = calculateHand(dealerCards);
+
+            const game = {
+                userId: i.user.id,
+                bet,
+                playerCards,
+                dealerCards,
+                gameOver: false
+            };
+
+            // Ha azonnali Blackjack (21) van az első osztásból
+            if (playerSum === 21) {
+                game.gameOver = true;
+                const winAmount = Math.floor(bet * 2.5); // Blackjack jutalom 2.5x
+                userDb.balance += winAmount;
+                await userDb.save();
+
+                const embed = new EmbedBuilder()
+                    .setColor('#ffd700')
+                    .setTitle('🃏 BLACKJACK! ♠️♥️♦️♣️')
+                    .setDescription('✨ **Gratulálok, sima Blackjack!** ✨')
+                    .addFields(
+                        { name: '🧑 Te lapjaid', value: `${playerCards.map(c => c.display).join(', ')} (Érték: **${playerSum}**)`, inline: false },
+                        { name: '🤖 Osztó lapjai', value: `${dealerCards.map(c => c.display).join(', ')} (Érték: **${dealerSum}**)`, inline: false },
+                        { name: '💰 Nyeremény', value: `\`\`\`+${formatFt(winAmount)}\`\`\``, inline: true }
+                    );
+                return i.reply({ embeds: [embed] });
+            }
+
+            const embed = new EmbedBuilder()
+                .setColor('#2f3136')
+                .setTitle('🃏 BLACKJACK ASZTAL')
+                .addFields(
+                    { name: '🧑 Te lapjaid', value: `${playerCards.map(c => c.display).join(', ')} (Érték: **${playerSum}**)`, inline: false },
+                    { name: '🤖 Osztó lapjai', value: `${dealerCards[0].display}, 🎴 (Rejtett)`, inline: false },
+                    { name: '💵 Tét', value: formatFt(bet), inline: true }
+                );
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('bj_hit').setLabel('➕ Lapot (Hit)').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('bj_stand').setLabel('🛑 Megállás (Stand)').setStyle(ButtonStyle.Success)
+            );
+
+            const msg = await i.reply({ embeds: [embed], components: [row], fetchReply: true });
+            activeBlackjack.set(msg.id, game);
+            return;
+        }
+
+        // --- DAILY PARANCS ---
         if (i.commandName === 'daily') {
             const now = new Date();
             const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 
             if (userDb.lastDaily >= todayMidnight) {
-                // Kiszámoljuk hány óra és perc van holnap éjfélig
                 const tomorrowMidnight = todayMidnight + 24 * 60 * 60 * 1000;
                 const diffMs = tomorrowMidnight - now.getTime();
                 const hours = Math.floor(diffMs / (1000 * 60 * 60));
                 const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
 
-                return i.reply({ content: `⏳ Már felvetted a mai napi jutalmat! Következő alkalom holnap éjfél után. Várj még **${hours} órát és ${minutes} percet**.` });
+                return i.reply({ content: `⏳ Már felvetted a mai napi jutalmat! Várj még **${hours} órát és ${minutes} percet**.` });
             }
 
             const dailyAmount = 100000;
@@ -415,17 +502,17 @@ client.on('interactionCreate', async (i) => {
             return i.reply({ content: `🎁 Sikeresen felvedd a mai napi jutalmat: **${formatFt(dailyAmount)}** jóváírva az egyenlegeden! 🎉` });
         }
 
-        // --- WORK PARANCS (3k - 10k, 1 perc cooldown) ---
+        // --- WORK PARANCS ---
         if (i.commandName === 'work') {
             const now = Date.now();
-            const cd = 60 * 1000; // 1 perc
+            const cd = 60 * 1000;
 
             if (now - userDb.lastWork < cd) {
                 const remainingSec = Math.ceil((cd - (now - userDb.lastWork)) / 1000);
-                return i.reply({ content: `⏳ Túl sokat dolgozol! Pihenj még **${remainingSec} másodpercet** a következő munka előtt.`, ephemeral: true });
+                return i.reply({ content: `⏳ Pihenj még **${remainingSec} másodpercet** a következő munka előtt.`, ephemeral: true });
             }
 
-            const workAmount = Math.floor(Math.random() * 7001) + 3000; // 3000 és 10000 között
+            const workAmount = Math.floor(Math.random() * 7001) + 3000;
             userDb.balance += workAmount;
             userDb.lastWork = now;
             await userDb.save();
@@ -436,9 +523,7 @@ client.on('interactionCreate', async (i) => {
                 `Felsöpörtél a kaszinóban, a jutalmad: **${formatFt(workAmount)}**! 🧹`,
                 `Besegítettél a szerver karbantartásába, kaptál **${formatFt(workAmount)}**-ot! 🛠️`
             ];
-            const randomJob = jobs[Math.floor(Math.random() * jobs.length)];
-
-            return i.reply({ content: randomJob });
+            return i.reply({ content: jobs[Math.floor(Math.random() * jobs.length)] });
         }
 
         if (i.commandName === 'treasure') {
@@ -676,6 +761,93 @@ client.on('interactionCreate', async (i) => {
 
     // GOMB INTERAKCIÓK
     if (i.isButton()) {
+        // --- BLACKJACK GOMBOK ---
+        if (i.customId === 'bj_hit' || i.customId === 'bj_stand') {
+            const game = activeBlackjack.get(i.message.id);
+            if (!game) return i.reply({ content: '❌ Ez a játék már véget ért vagy lejárt!', ephemeral: true });
+            if (i.user.id !== game.userId) return i.reply({ content: '❌ Ez nem a te kártyapartid! 🤡', ephemeral: true });
+            if (game.gameOver) return i.reply({ content: '❌ Ez a kör már lezárult!', ephemeral: true });
+
+            const uDb = await getUserDb(i.guild.id, i.user.id);
+
+            if (i.customId === 'bj_hit') {
+                game.playerCards.push(getRandomCard());
+                const playerSum = calculateHand(game.playerCards);
+
+                if (playerSum > 21) {
+                    game.gameOver = true;
+                    activeBlackjack.delete(i.message.id);
+
+                    const loseEmbed = new EmbedBuilder()
+                        .setColor('#ff0000')
+                        .setTitle('💥 TÚLHÚZTAD! (BUST)')
+                        .addFields(
+                            { name: '🧑 Te lapjaid', value: `${game.playerCards.map(c => c.display).join(', ')} (Érték: **${playerSum}**)`, inline: false },
+                            { name: '🤖 Osztó lapjai', value: `${game.dealerCards.map(c => c.display).join(', ')} (Érték: **${calculateHand(game.dealerCards)}**)`, inline: false },
+                            { name: '💸 Elveszített tét', value: `\`\`\`-${formatFt(game.bet)}\`\`\``, inline: true }
+                        );
+                    return i.update({ embeds: [loseEmbed], components: [] });
+                }
+
+                const embed = new EmbedBuilder()
+                    .setColor('#2f3136')
+                    .setTitle('🃏 BLACKJACK ASZTAL')
+                    .addFields(
+                        { name: '🧑 Te lapjaid', value: `${game.playerCards.map(c => c.display).join(', ')} (Érték: **${playerSum}**)`, inline: false },
+                        { name: '🤖 Osztó lapjai', value: `${game.dealerCards[0].display}, 🎴 (Rejtett)`, inline: false },
+                        { name: '💵 Tét', value: formatFt(game.bet), inline: true }
+                    );
+                return i.update({ embeds: [embed] });
+            }
+
+            if (i.customId === 'bj_stand') {
+                game.gameOver = true;
+                activeBlackjack.delete(i.message.id);
+
+                let playerSum = calculateHand(game.playerCards);
+                let dealerSum = calculateHand(game.dealerCards);
+
+                // Osztó húz, amíg eléri a 17-et
+                while (dealerSum < 17) {
+                    game.dealerCards.push(getRandomCard());
+                    dealerSum = calculateHand(game.dealerCards);
+                }
+
+                let resultText = '';
+                let embedColor = '#2f3136';
+                let wonAmount = 0;
+
+                if (dealerSum > 21 || playerSum > dealerSum) {
+                    embedColor = '#00ff00';
+                    wonAmount = game.bet * 2;
+                    uDb.balance += wonAmount;
+                    resultText = `🎉 **NYERTÉL!** Kaptál **${formatFt(wonAmount)}**-ot!`;
+                } else if (playerSum === dealerSum) {
+                    embedColor = '#ffd700';
+                    wonAmount = game.bet;
+                    uDb.balance += wonAmount;
+                    resultText = `🤝 **DÖNTETLEN (Push)!** Visszakaptad a téted (**${formatFt(wonAmount)}**).`;
+                } else {
+                    embedColor = '#ff0000';
+                    resultText = `😢 **VESZTETTÉL!** Az osztó nyert.`;
+                }
+                await uDb.save();
+
+                const finalEmbed = new EmbedBuilder()
+                    .setColor(embedColor)
+                    .setTitle('🃏 BLACKJACK - EREDMÉNY')
+                    .setDescription(resultText)
+                    .addFields(
+                        { name: '🧑 Te lapjaid', value: `${game.playerCards.map(c => c.display).join(', ')} (Érték: **${playerSum}**)`, inline: false },
+                        { name: '🤖 Osztó lapjai', value: `${game.dealerCards.map(c => c.display).join(', ')} (Érték: **${dealerSum}**)`, inline: false },
+                        { name: '💳 Új egyenleged', value: formatFt(uDb.balance), inline: true }
+                    );
+
+                return i.update({ embeds: [finalEmbed], components: [] });
+            }
+        }
+
+        // --- MINES GOMBOK ---
         if (i.customId.startsWith('mine_')) {
             const game = activeMines.get(i.message.id);
             if (!game) return i.reply({ content: '❌ Ez a játék már véget ért!', ephemeral: true });
