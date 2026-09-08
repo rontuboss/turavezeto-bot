@@ -359,7 +359,7 @@ const commands = [
     new SlashCommandBuilder().setName('work').setDescription('Munkavégzés pénzért (Egyenlegfüggő, 1 perc cooldown)'),
     new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Kinek az egyenlege?')),
     new SlashCommandBuilder().setName('stat').setDescription('Kaszinó statisztika lekérése').addUserOption(o => o.setName('user').setDescription('Kinek a statisztikája?')),
-    new SlashCommandBuilder().setName('hitel').setDescription('Banki hitel parancsok')
+    new SlashCommandBuilder().setName('hitel').setDescription('Banki hitel parancsok (15% kamat)')
         .addSubcommand(s => s.setName('felvesz').setDescription('Hitel felvétele (max 50 millió Ft)').addIntegerOption(o => o.setName('osszeg').setDescription('Igényelt összeg (Ft)').setRequired(true).setMinValue(1).setMaxValue(50000000)))
         .addSubcommand(s => s.setName('statusz').setDescription('Aktuális hitel lekérése'))
         .addSubcommand(s => s.setName('torleszt').setDescription('Hitel visszafizetése').addIntegerOption(o => o.setName('osszeg').setDescription('Visszafizetendő összeg (Ft)').setRequired(true).setMinValue(1))),
@@ -506,10 +506,10 @@ client.on('interactionCreate', async (i) => {
             commandCooldowns.set(cooldownKey, Date.now());
         }
 
-        // Hitel ellenőrzés kaszinóhoz (Ha mínuszban van vagy van hiteltartozása, nem játszhat)
+        // Csak akkor tiltjuk le a kaszinót, ha a zsetonja teljesen elfogyott és MÍNUSZBA ment (nem pedig a hitel miatt)
         if (['blackjack', 'mines'].includes(i.commandName)) {
-            if (userDb.balance < 0 || userDb.loanDebt > 0) {
-                return i.reply({ content: `❌ **Kaszinózási tiltás!** Mivel mínuszban van az egyenleged vagy aktív hiteltartozásod van (**${formatFt(userDb.loanDebt)}**), nem játszhatsz amíg egyenesbe nem jössz! 🚫`, ephemeral: true });
+            if (userDb.balance < 0) {
+                return i.reply({ content: `❌ **Kaszinózási tiltás!** Mivel aenleged mínuszba ment (**${formatFt(userDb.balance)}**), nem játszhatsz amíg dolgozással vagy befizetéssel egyenesbe nem jössz! 🚫`, ephemeral: true });
             }
         }
 
@@ -617,7 +617,7 @@ client.on('interactionCreate', async (i) => {
             const baseMin = 3000;
             const baseMax = 10000;
             const randomBase = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
-            const balanceBonus = Math.floor(userDb.balance * 0.005);
+            const balanceBonus = Math.floor(Math.max(0, userDb.balance) * 0.005);
             const workAmount = randomBase + balanceBonus;
 
             userDb.balance += workAmount;
@@ -647,8 +647,8 @@ client.on('interactionCreate', async (i) => {
             const baseMin = 20000;
             const baseMax = 48000;
             const randomBase = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
-            const balanceBonus = Math.floor(userDb.balance * 0.01);
-            const amount = isSuperChest ? 250000 + Math.floor(userDb.balance * 0.05) : randomBase + balanceBonus;
+            const balanceBonus = Math.floor(Math.max(0, userDb.balance) * 0.01);
+            const amount = isSuperChest ? 250000 + Math.floor(Math.max(0, userDb.balance) * 0.05) : randomBase + balanceBonus;
 
             userDb.balance += amount;
             userDb.lastTreasure = now;
@@ -664,7 +664,7 @@ client.on('interactionCreate', async (i) => {
         if (i.commandName === 'bal') {
             const target = i.options.getUser('user') || i.user;
             const targetDb = await getUserDb(i.guild.id, target.id);
-            return i.reply({ content: `💳 **${target.username}** egyenlege: **${formatFt(targetDb.balance)}** ${targetDb.loanDebt > 0 ? `(Hitel tartozás: ${formatFt(targetDb.loanDebt)})` : ''}` });
+            return i.reply({ content: `💳 **${target.username}** egyenlege: **${formatFt(targetDb.balance)}** ${targetDb.loanDebt > 0 ? `(Hitel tartozás kamatostul: ${formatFt(targetDb.loanDebt)})` : ''}` });
         }
 
         if (i.commandName === 'stat') {
@@ -721,15 +721,18 @@ client.on('interactionCreate', async (i) => {
                     return i.reply({ content: `❌ Legfeljebb 50 000 000 Ft hitelt vehetsz fel!`, ephemeral: true });
                 }
 
+                // 15% kamat felszámítása a felvett összegre
+                const debtWithInterest = Math.floor(amount * 1.15);
+
                 userDb.balance += amount;
-                userDb.loanDebt = amount; // A visszafizetendő összeg
+                userDb.loanDebt = debtWithInterest; 
                 await userDb.save();
 
-                return i.reply({ content: `🏦 Sikeresen felvettél **${formatFt(amount)}** hitelt! Jóváírva az egyenlegeden.\n⚠️ *Figyelem: Amíg a hitelt vissza nem fizeted vagy mínuszban vagy, a kaszinó parancsok le vannak tiltva!*` });
+                return i.reply({ content: `🏦 Sikeresen felvettél **${formatFt(amount)}** hitelt! Jóváírva az egyenlegeden.\n📈 **Kamat (15%):** ${formatFt(debtWithInterest - amount)}\n📋 **Összes visszafizetendő:** **${formatFt(debtWithInterest)}**\n\n*Jó szórakozást a kaszinóban! 🎰*` });
             }
 
             if (sub === 'statusz') {
-                return i.reply({ content: `📋 **Hitel Státuszod:**\n• Egyenleg: **${formatFt(userDb.balance)}**\n• Visszafizetendő hitel: **${formatFt(userDb.loanDebt)}**` });
+                return i.reply({ content: `📋 **Hitel Státuszod:**\n• Egyenleg: **${formatFt(userDb.balance)}**\n• Visszafizetendő tartozás (kamatostul): **${formatFt(userDb.loanDebt)}**` });
             }
 
             if (sub === 'torleszt') {
