@@ -184,14 +184,18 @@ async function endGiveaway(gwData) {
 let lastTriggeredMinute = '';
 setInterval(async () => {
     const timeStr = new Date().toLocaleTimeString('hu-HU', { timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false });
-    if (['15:58', '15:59', '16:00', '19:58', '19:59', '20:00'].includes(timeStr) && lastTriggeredMinute !== timeStr) {
+    const targetTimes = ['15:58', '15:59', '16:00', '19:58', '19:59', '20:00'];
+    
+    if (targetTimes.includes(timeStr) && lastTriggeredMinute !== timeStr) {
         lastTriggeredMinute = timeStr;
         const channel = client.channels.cache.get(CONFIG.REMINDER_CHANNEL);
         if (channel) {
             const alertEmoji = channel.guild?.emojis.cache.find(e => e.name.toLowerCase() === 'alert') || '🚨';
+            const eventTime = ['15:58', '15:59', '16:00'].includes(timeStr) ? '16:00' : '20:00';
             const count = Math.floor(Math.random() * 4) + 5; // 5-8 ping
+            
             for (let i = 0; i < count; i++) {
-                await channel.send({ content: `${alertEmoji} 🚨 **RIASZTÁS! MEGY A VÁNDORKERESKEDŐ!** 🚨 ${alertEmoji}\n<@&${CONFIG.REMINDER_ROLE}>` }).catch(() => {});
+                await channel.send({ content: `${alertEmoji} 🚨 **RIASZTÁS! MEGY A VÁNDORKERESKEDŐ! (${eventTime})** 🚨 ${alertEmoji}\n<@&${CONFIG.REMINDER_ROLE}>` }).catch(() => {});
                 await new Promise(resolve => setTimeout(resolve, 1500));
             }
         }
@@ -238,26 +242,10 @@ client.on('guildMemberAdd', async (m) => {
 });
 client.on('guildMemberRemove', (m) => updateStatus(m.guild));
 
-// PREFIX PARANCSOK (.sorsolas, .partner, .sima, .testping)
+// PREFIX PARANCSOK (.sorsolas, .partner, .sima)
 client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.guild) return;
     const cmd = m.content.toLowerCase().trim();
-
-    // EMLÉKEZTETŐ TESZTELÉSE
-    if (cmd === '.testping') {
-        await m.delete().catch(() => {});
-        if (!m.member.permissions.has(PermissionFlagsBits.ManageChannels)) return;
-        const channel = client.channels.cache.get(CONFIG.REMINDER_CHANNEL);
-        if (channel) {
-            const alertEmoji = channel.guild?.emojis.cache.find(e => e.name.toLowerCase() === 'alert') || '🚨';
-            const count = Math.floor(Math.random() * 4) + 5; // 5-8 ping
-            for (let i = 0; i < count; i++) {
-                await channel.send({ content: `${alertEmoji} 🚨 **RIASZTÁS! MEGY A VÁNDORKERESKEDŐ! (TESZT PING)** 🚨 ${alertEmoji}\n<@&${CONFIG.REMINDER_ROLE}>` }).catch(() => {});
-                await new Promise(resolve => setTimeout(resolve, 1500));
-            }
-        }
-        return;
-    }
 
     if (['.sorsolas', '.partner', '.sima'].includes(cmd)) {
         await m.delete().catch(() => {});
