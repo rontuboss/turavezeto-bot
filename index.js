@@ -259,25 +259,27 @@ setInterval(async () => {
 }, 10000);
 
 // --- SLASH PARANCSOK REGISZTRÁCIÓJA ---
+const ADMIN_PERM = PermissionFlagsBits.ManageGuild.toString();
+
 const commands = [
     // ADMIN / STAFF PARANCSOK (ELREJTVE A TAGOK ELŐL)
-    new SlashCommandBuilder().setName('giveaway').setDescription('Nyereményjáték parancsok').setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    new SlashCommandBuilder().setName('giveaway').setDescription('Nyereményjáték parancsok').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addSubcommand(s => s.setName('start').setDescription('Indítás').addStringOption(o => o.setName('duration').setDescription('Időtartam').setRequired(true)).addStringOption(o => o.setName('prize').setDescription('Nyeremény').setRequired(true)).addIntegerOption(o => o.setName('winners').setDescription('Nyertesek').setRequired(true).setMinValue(1)).addIntegerOption(o => o.setName('booster_bonus').setDescription('Booster bónusz %')))
         .addSubcommand(s => s.setName('reroll').setDescription('Újrasorsolás').addStringOption(o => o.setName('message_id').setDescription('Üzenet ID').setRequired(true)).addIntegerOption(o => o.setName('winners').setDescription('Új nyertesek')))
         .addSubcommand(s => s.setName('end').setDescription('Leállítás').addStringOption(o => o.setName('message_id').setDescription('Üzenet ID').setRequired(true))),
-    new SlashCommandBuilder().setName('ticket').setDescription('Ticket parancsok').setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    new SlashCommandBuilder().setName('ticket').setDescription('Ticket parancsok').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addSubcommand(s => s.setName('setup').setDescription('Panel elküldése'))
         .addSubcommand(s => s.setName('sorsolas').setDescription('Nyereményjáték kategóriába'))
         .addSubcommand(s => s.setName('partner').setDescription('Partner kategóriába'))
         .addSubcommand(s => s.setName('sima').setDescription('Vissza az alapértelmezett kategóriába')),
-    new SlashCommandBuilder().setName('fakeban').setDescription('Troll kamu kitiltás').setDefaultMemberPermissions(PermissionFlagsBits.Administrator).addUserOption(o => o.setName('user').setDescription('Felhasználó').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('Indok')),
-    new SlashCommandBuilder().setName('nitro').setDescription('Ingyen Discord Nitro ajándék (kamu)').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-    new SlashCommandBuilder().setName('mock').setDescription('Spongyabob gúnyolódó szöveg').setDefaultMemberPermissions(PermissionFlagsBits.Administrator).addStringOption(o => o.setName('text').setDescription('A szöveg').setRequired(true)),
-    new SlashCommandBuilder().setName('roulette').setDescription('Orosz rulett játék (1/6 esély 1 perces némításra)').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-    new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').setDefaultMemberPermissions(PermissionFlagsBits.Administrator).addUserOption(o => o.setName('user').setDescription('Kinek szóljon?').setRequired(true)),
-    new SlashCommandBuilder().setName('rate').setDescription('Értékelj bármit').setDefaultMemberPermissions(PermissionFlagsBits.Administrator).addStringOption(o => o.setName('thing').setDescription('Mit értékeljen?').setRequired(true)),
+    new SlashCommandBuilder().setName('fakeban').setDescription('Troll kamu kitiltás').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addUserOption(o => o.setName('user').setDescription('Felhasználó').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('Indok')),
+    new SlashCommandBuilder().setName('nitro').setDescription('Ingyen Discord Nitro ajándék (kamu)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false),
+    new SlashCommandBuilder().setName('mock').setDescription('Spongyabob gúnyolódó szöveg').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addStringOption(o => o.setName('text').setDescription('A szöveg').setRequired(true)),
+    new SlashCommandBuilder().setName('roulette').setDescription('Orosz rulett játék (1/6 esély 1 perces némításra)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false),
+    new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addUserOption(o => o.setName('user').setDescription('Kinek szóljon?').setRequired(true)),
+    new SlashCommandBuilder().setName('rate').setDescription('Értékelj bármit').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addStringOption(o => o.setName('thing').setDescription('Mit értékeljen?').setRequired(true)),
 
-    // MINDENKI ÁLTAL LÁTHATÓ CSATATORNA / TAG PARANCSOK
+    // MINDENKI ÁLTAL LÁTHATÓ CSATORNA / TAG PARANCSOK
     new SlashCommandBuilder().setName('invites').setDescription('Meghívók lekérése').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
     new SlashCommandBuilder().setName('treasure').setDescription('Ingyen Forint kikérése (Boostereknek 7 perc, másnak 10 perc)'),
     new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Kinek az egyenlege?')),
@@ -293,7 +295,7 @@ client.once('ready', async () => {
     
     try {
         await new REST({ version: '10' }).setToken(process.env.TOKEN).put(Routes.applicationGuildCommands(client.user.id, CONFIG.GUILD_ID), { body: commands });
-        console.log('✅ Szerver-specifikus Slash parancsok azonnal frissítve!');
+        console.log('✅ Szerver-specifikus Slash parancsok frissítve!');
     } catch (err) {
         console.error('❌ Hiba a parancsok regisztrációjánál:', err);
     }
@@ -646,7 +648,7 @@ client.on('interactionCreate', async (i) => {
 
             if (i.customId.startsWith('mine_tile_')) {
                 const idx = parseInt(i.customId.split('_')[2]);
-                if (game.revealed.includes(idx));
+                if (game.revealed.includes(idx)) return i.deferUpdate();
 
                 if (game.grid[idx] === '💣') {
                     activeMines.delete(i.message.id);
