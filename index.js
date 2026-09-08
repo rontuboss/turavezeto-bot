@@ -17,8 +17,7 @@ const CONFIG = {
     REMINDER_ROLE: '1546794488372924476',
     BOOSTER_ROLE: '1449473778386997311',
     STAFF_ROLE: '1436671411178569832',
-    MEMBER_ROLE: '1486847637134246139',
-    CASINO_VAULT_USER: '1273195305013084200'
+    MEMBER_ROLE: '1486847637134246139'
 };
 
 // ==========================================
@@ -40,6 +39,13 @@ const User = mongoose.model('User', new mongoose.Schema({
         mines: { played: { type: Number, default: 0 }, won: { type: Number, default: 0 }, netProfit: { type: Number, default: 0 } }
     }
 }));
+
+// Globális szerver statisztika (pl. kaszinó össz veszteség)
+const GuildSetting = mongoose.model('GuildSetting', new mongoose.Schema({
+    guildId: String,
+    casinoLossVault: { type: Number, default: 0 }
+}));
+
 const Invite = mongoose.model('Invite', new mongoose.Schema({ guildId: String, userId: String, invites: Number }));
 const Giveaway = mongoose.model('Giveaway', new mongoose.Schema({ messageId: String, channelId: String, guildId: String, endTime: Number, prize: String, winnerCount: Number, boosterBonus: Number, ended: { type: Boolean, default: false } }));
 
@@ -62,14 +68,23 @@ const commandCooldowns = new Map();
 const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' Ft';
 const getUserDb = async (guildId, userId) => await User.findOne({ guildId, userId }) || new User({ guildId, userId, balance: 0, lastTreasure: 0, lastDaily: 0, lastWeekly: 0, lastWork: 0 });
 
+async function getGuildSettings(guildId) {
+    let settings = await GuildSetting.findOne({ guildId });
+    if (!settings) {
+        settings = new GuildSetting({ guildId, casinoLossVault: 0 });
+        await settings.save();
+    }
+    return settings;
+}
+
 async function addLossToVault(guildId, amount) {
     if (amount <= 0) return;
     try {
-        const vaultDb = await getUserDb(guildId, CONFIG.CASINO_VAULT_USER);
-        vaultDb.balance += amount;
-        await vaultDb.save();
+        const settings = await getGuildSettings(guildId);
+        settings.casinoLossVault += amount;
+        await settings.save();
     } catch (e) {
-        console.error('❌ Hiba a kaszinó számla frissítésekor:', e);
+        console.error('❌ Hiba a globális kaszinó számla frissítésekor:', e);
     }
 }
 
@@ -651,7 +666,7 @@ client.on('interactionCreate', async (i) => {
                 .addFields(
                     { 
                         name: '🌐 Összesített Áttekintés (Overall)', 
-                        value: `> 📈 **Nyerési arány:** ${overallWinRate}%\n> 🎮 **Lejátszott körök:** ${totalPlayed} db\n> 💰 **Egyenleg / Profit:** \`\`\`diff\n${overallDiffTag}\`\`\``, 
+                        value: `> 📈 **Nyerési arány:** ${overallWinRate}%\n> 🎮 **Lejátszott körök:** ${totalPlayed} db\n> 💰 **Profit:** \`\`\`diff\n${overallDiffTag}\`\`\``, 
                         inline: false 
                     },
                     { 
@@ -688,9 +703,21 @@ client.on('interactionCreate', async (i) => {
 
         if (i.commandName === 'top') {
             const topUsers = await User.find({ guildId: i.guild.id }).sort({ balance: -1 }).limit(10);
-            let desc = "";
-            topUsers.forEach((u, index) => desc += `**${index + 1}.** <@${u.userId}> — **${formatFt(u.balance)}**\n`);
-            const embed = new EmbedBuilder().setColor('#ffd700').setTitle('🏆 A Szerver Leggazdagabb Tagjai').setDescription(desc || 'Még senkinek sincs pénze.');
+            const guildSettings = await getGuildSettings(i.guild.id);
+            const totalLoss = guildSettings.casinoLossVault;
+
+            let desc = `🔴 **Globális kaszinó veszteség:** \`\`\`diff\n-${formatFt(totalLoss)}\`\`\`\n`;
+            desc += `👑 **A leg-gazdagabb tagok:**\n`;
+            
+            topUsers.forEach((u, index) => {
+                desc += `**${index + 1}.** <@${u.userId}> — **${formatFt(u.balance)}**\n`;
+            });
+
+            const embed = new EmbedBuilder()
+                .setColor('#ffd700')
+                .setTitle('🏆 A Szerver Leggazdagabb Tagjai & Kaszinó Stat')
+                .setDescription(desc || 'Még senkinek sincs pénze.');
+            
             return i.reply({ embeds: [embed] });
         }
 
