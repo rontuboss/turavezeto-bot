@@ -220,7 +220,9 @@ const commands = [
     new SlashCommandBuilder().setName('mock').setDescription('Spongyabob gúnyolódó szöveg').addStringOption(o => o.setName('text').setDescription('A gúnyolandó szöveg').setRequired(true)),
     new SlashCommandBuilder().setName('roulette').setDescription('Orosz rulett játék (1/6 esély 1 perces némításra)'),
     new SlashCommandBuilder().setName('iq').setDescription('IQ teszt mérés').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
-    new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').addUserOption(o => o.setName('user').setDescription('Kinek szóljon az oltás?').setRequired(true))
+    new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').addUserOption(o => o.setName('user').setDescription('Kinek szóljon az oltás?').setRequired(true)),
+    new SlashCommandBuilder().setName('meret').setDescription('Faszméret mérés').addUserOption(o => o.setName('user').setDescription('Kinek a méretét mérjük meg?')),
+    new SlashCommandBuilder().setName('rate').setDescription('Értékelj bármit 1-től 10-ig').addStringOption(o => o.setName('thing').setDescription('Mit értékeljen a bot?').setRequired(true))
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
@@ -293,8 +295,8 @@ client.on('interactionCreate', async (i) => {
 
     if (i.isChatInputCommand()) {
 
-        // LOPAKODÓ MÓD (STEALTH): Eltünteti a gray "X használta ezt: /command" fejlécet!
-        if (['fakeban', 'nitro', 'mock', 'roulette', 'iq', 'roast'].includes(i.commandName)) {
+        // LOPAKODÓ MÓD (STEALTH): Eltünteti a szürke "X használta ezt: /command" fejlécet!
+        if (['fakeban', 'nitro', 'mock', 'roulette', 'iq', 'roast', 'meret', 'rate'].includes(i.commandName)) {
             await i.deferReply({ ephemeral: true });
 
             if (i.commandName === 'fakeban') {
@@ -360,6 +362,32 @@ client.on('interactionCreate', async (i) => {
                 ];
                 const randomRoast = roasts[Math.floor(Math.random() * roasts.length)];
                 await i.channel.send({ content: `🔥 **<@${target.id}>**: ${randomRoast}` });
+                await i.deleteReply().catch(() => {});
+            }
+
+            else if (i.commandName === 'meret') {
+                const target = i.options.getUser('user') || i.user;
+                const sizeNum = Math.floor(Math.random() * 30) + 1; // 1 - 30 cm
+                const equals = '='.repeat(sizeNum);
+                await i.channel.send({ content: `🍆 **<@${target.id}>** fasz mérete: **8${equals}D** (${sizeNum} cm)` });
+                await i.deleteReply().catch(() => {});
+            }
+
+            else if (i.commandName === 'rate') {
+                const thing = i.options.getString('thing');
+                const rating = Math.floor(Math.random() * 10) + 1;
+                const comments = [
+                    "Katasztrofális, jobb ha nem is beszélünk róla. 🤮",
+                    "Gagyi, mint a piaci napszemüveg. 🕶️",
+                    "Elmegy egy gyenge keddi napon. 😐",
+                    "Középszerű, semmi extra. 🤷‍♂️",
+                    "Teljesen rendben van! 👍",
+                    "Kifejezetten tetszetős! 👌",
+                    "Zseniális darab! 🔥",
+                    "Abszolút mestermű, 10/10! 🏆"
+                ];
+                const comment = comments[Math.min(Math.floor((rating - 1) / 10 * comments.length), comments.length - 1)];
+                await i.channel.send({ content: `⭐ Értékelés: **"${thing}"**\n📊 Eredmény: **${rating}/10** - *${comment}*` });
                 await i.deleteReply().catch(() => {});
             }
 
