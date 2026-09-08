@@ -197,7 +197,7 @@ function createMinesEmbed(bet, bombs, revealedCount, currentMult, currentWin, ti
             { name: '💵 TÉT', value: `\`\`\`${formatFt(bet)}\`\`\``, inline: true },
             { name: '📈 SZORZÓ', value: `\`\`\`x${currentMult.toFixed(2)}\`\`\``, inline: true },
             { name: '💰 VÁRHATÓ NYEREMÉNY', value: `\`\`\`${formatFt(currentWin)}\`\`\``, inline: true },
-            { name: '📊 JÁTÉK ÁLLÁSA', value: `💎 Megtalált gyémántok: **${revealedCount} / ${25 - bombs}**\n💣 Bombák a pályán: **${bombs} db**`, inline: false }
+            { name: '📊 JÁTÉK ÁLLÁSA', value: `💎 Megtalált gyémántok: **${revealedCount} / ${25 - bombs}**\n💣 Bombák a pályán: **${bombs} db**\n\n*💡 Tipp: Reagálj a ✅ emojira a kifizetéshez!*`, inline: false }
         );
 }
 
@@ -391,8 +391,48 @@ client.on('messageCreate', async (m) => {
 });
 
 // ==========================================
-// 9. INTERACTIONS (COMMANDS & BUTTONS)
+// 9. INTERACTIONS & REACTIONS (MINES & BLACKJACK)
 // ==========================================
+client.on('messageReactionAdd', async (reaction, user) => {
+    if (user.bot || !reaction.message.guild) return;
+    if (reaction.emoji.name !== '✅') return;
+
+    const game = Array.from(activeMines.values()).find(g => g.msgId === reaction.message.id);
+    if (!game) return;
+
+    if (user.id !== game.userId) {
+        await reaction.users.remove(user.id).catch(() => {});
+        return;
+    }
+
+    if (game.revealed.length === 0) {
+        await reaction.users.remove(user.id).catch(() => {});
+        return;
+    }
+
+    activeMines.delete(game.msgId);
+    const currentMult = getMinesMultiplier(25, game.bombs, game.revealed.length);
+    const winAmount = Math.floor(game.bet * currentMult);
+    const uDb = await getUserDb(reaction.message.guild.id, user.id);
+    uDb.balance += winAmount;
+    await uDb.save();
+
+    const endEmbed = new EmbedBuilder()
+        .setColor('#00ff00')
+        .setTitle('💰 KIFIZETÉS SIKERES!')
+        .addFields(
+            { name: '🏆 MEGNYERT ÖSSZEG', value: `\`\`\`${formatFt(winAmount)}\`\`\``, inline: true },
+            { name: '📈 VÉGSŐ SZORZÓ', value: `\`\`\`x${currentMult.toFixed(2)}\`\`\``, inline: true },
+            { name: '💳 ÚJ EGYENLEGED', value: `\`\`\`${formatFt(uDb.balance)}\`\`\``, inline: false }
+        )
+        .setDescription('Sikeresen kiszálltál a játékból a ✅ pipával!');
+
+    try {
+        await reaction.message.edit({ embeds: [endEmbed], components: buildMinesComponents(game, true) });
+        await reaction.message.reactions.removeAll().catch(() => {});
+    } catch (e) {}
+});
+
 client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton()) return;
 
@@ -584,12 +624,7 @@ client.on('interactionCreate', async (i) => {
 
             const msg = await i.editReply({ embeds: [embed], components: rows });
             game.msgId = msg.id;
-
-            const cashoutRow = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`mine_cashout_${msg.id}`).setLabel('💰 KIFIZETÉS').setStyle(ButtonStyle.Success)
-            );
-            const controlMsg = await i.channel.send({ content: `👇 **Kifizetés gomb a(z) <@${i.user.id}> játékához:**`, components: [cashoutRow] });
-            game.controlMsgId = controlMsg.id;
+            await msg.react('✅'); // Automatikusan ráküldi a pipa reakciót
 
             activeMines.set(msg.id, game);
             return;
@@ -768,7 +803,7 @@ client.on('interactionCreate', async (i) => {
                     .setTitle('♠️ KASZINÓ BLACKJACK ASZTAL ♣️')
                     .addFields(
                         { name: '🧑 Játékos lapjai', value: `\`\`\`css\n${game.playerCards.map(c => c.display).join(' ')} (Összeg: ${playerSum})\`\`\``, inline: false },
-                        { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${dealerCards[0].display} 🎴 (Rejtett)\`\`\``, inline: false },
+                        { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${game.dealerCards[0].display} 🎴 (Rejtett)\`\`\``, inline: false },
                         { name: '💵 Tét', value: `\`\`\`${formatFt(game.bet)}\`\`\``, inline: true }
                     );
                 return i.update({ embeds: [embed] });
@@ -817,71 +852,36 @@ client.on('interactionCreate', async (i) => {
             }
         }
 
-        if (i.customId.startsWith('mine_')) {
-            const gameId = i.customId.startsWith('mine_cashout_') ? i.customId.replace('mine_cashout_', '') : null;
-            const game = gameId ? activeMines.get(gameId) : Array.from(activeMines.values()).find(g => g.userId === i.user.id);
-
+        if (i.customId.startsWith('mine_tile_')) {
+            const game = activeMines.get(i.message.id);
             if (!game) return i.reply({ content: '❌ Ez a játék már véget ért!', ephemeral: true });
             if (i.user.id !== game.userId) return i.reply({ content: '❌ Ez nem a te játékod! 🤡', ephemeral: true });
 
-            if (i.customId.startsWith('mine_cashout')) {
-                const currentMult = getMinesMultiplier(25, game.bombs, game.revealed.length);
-                const winAmount = Math.floor(game.bet * currentMult);
-                const uDb = await getUserDb(i.guild.id, i.user.id);
-                uDb.balance += winAmount;
-                await uDb.save();
-                activeMines.delete(game.msgId);
+            const idx = parseInt(i.customId.split('_')[2]);
+            if (game.revealed.includes(idx)) return i.deferUpdate();
 
-                const endEmbed = new EmbedBuilder()
-                    .setColor('#00ff00')
-                    .setTitle('💰 KIFIZETÉS SIKERES!')
-                    .addFields(
-                        { name: '🏆 MEGNYERT ÖSSZEG', value: `\`\`\`${formatFt(winAmount)}\`\`\``, inline: true },
-                        { name: '📈 VÉGSŐ SZORZÓ', value: `\`\`\`x${currentMult.toFixed(2)}\`\`\``, inline: true },
-                        { name: '💳 ÚJ EGYENLEGED', value: `\`\`\`${formatFt(uDb.balance)}\`\`\``, inline: false }
-                    )
-                    .setDescription('Sikeresen kiszálltál a játékból!');
+            if (game.grid[idx] === '💣') {
+                activeMines.delete(i.message.id);
+                await addLossToVault(i.guild.id, game.bet);
+
+                const loseEmbed = new EmbedBuilder()
+                    .setColor('#ff0000')
+                    .setTitle('💥 BUMM! AKNÁRA LÉPTÉL!')
+                    .addFields({ name: '💸 ELVESZÍTETT TÉT', value: `\`\`\`${formatFt(game.bet)}\`\`\``, inline: true })
+                    .setDescription('Sajnos bombát találtál, a teljes téted elveszett!');
                 
                 try {
-                    const msg = await i.channel.messages.fetch(game.msgId).catch(() => null);
-                    if (msg) await msg.edit({ embeds: [endEmbed], components: buildMinesComponents(game, true) });
-                } catch(e) {}
-                try {
-                    const controlMsg = await i.channel.messages.fetch(game.controlMsgId).catch(() => null);
-                    if (controlMsg) await controlMsg.delete().catch(() => {});
+                    await i.message.reactions.removeAll().catch(() => {});
                 } catch(e) {}
 
-                return i.deferUpdate();
+                return i.update({ embeds: [loseEmbed], components: buildMinesComponents(game, true) });
             }
 
-            if (i.customId.startsWith('mine_tile_')) {
-                const idx = parseInt(i.customId.split('_')[2]);
-                if (game.revealed.includes(idx)) return i.deferUpdate();
-
-                if (game.grid[idx] === '💣') {
-                    activeMines.delete(game.msgId);
-                    await addLossToVault(i.guild.id, game.bet);
-
-                    const loseEmbed = new EmbedBuilder()
-                        .setColor('#ff0000')
-                        .setTitle('💥 BUMM! AKNÁRA LÉPTÉL!')
-                        .addFields({ name: '💸 ELVESZÍTETT TÉT', value: `\`\`\`${formatFt(game.bet)}\`\`\``, inline: true })
-                        .setDescription('Sajnos bombát találtál, a teljes téted elveszett!');
-                    
-                    try {
-                        const controlMsg = await i.channel.messages.fetch(game.controlMsgId).catch(() => null);
-                        if (controlMsg) await controlMsg.delete().catch(() => {});
-                    } catch(e) {}
-
-                    return i.update({ embeds: [loseEmbed], components: buildMinesComponents(game, true) });
-                }
-
-                game.revealed.push(idx);
-                const currentMult = getMinesMultiplier(25, game.bombs, game.revealed.length);
-                const currentWin = Math.floor(game.bet * currentMult);
-                const updateEmbed = createMinesEmbed(game.bet, game.bombs, game.revealed.length, currentMult, currentWin, '💎 GYÉMÁNT TALÁLAT!');
-                return i.update({ embeds: [updateEmbed], components: buildMinesComponents(game, false) });
-            }
+            game.revealed.push(idx);
+            const currentMult = getMinesMultiplier(25, game.bombs, game.revealed.length);
+            const currentWin = Math.floor(game.bet * currentMult);
+            const updateEmbed = createMinesEmbed(game.bet, game.bombs, game.revealed.length, currentMult, currentWin, '💎 GYÉMÁNT TALÁLAT!');
+            return i.update({ embeds: [updateEmbed], components: buildMinesComponents(game, false) });
         }
 
         if (i.customId === 'claim_fake_nitro') return i.reply({ content: `🎉 **<@${i.user.id}>** bedőlt a kamu Nitrónak és át lett verve! 🤡`, ephemeral: false });
