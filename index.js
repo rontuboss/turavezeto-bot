@@ -212,7 +212,12 @@ const commands = [
         .addSubcommand(s => s.setName('sorsolas').setDescription('Nyereményjáték kategóriába'))
         .addSubcommand(s => s.setName('partner').setDescription('Partner kategóriába'))
         .addSubcommand(s => s.setName('sima').setDescription('Vissza az alapértelmezett kategóriába')),
-    new SlashCommandBuilder().setName('invites').setDescription('Meghívók lekérése').addUserOption(o => o.setName('user').setDescription('Felhasználó'))
+    new SlashCommandBuilder().setName('invites').setDescription('Meghívók lekérése').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
+    
+    // TROLL SLASH PARANCSOK
+    new SlashCommandBuilder().setName('fakeban').setDescription('Troll kamu kitiltás').addUserOption(o => o.setName('user').setDescription('Kit tiltsunk ki kísérletképpen?').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('Indok')),
+    new SlashCommandBuilder().setName('nitro').setDescription('Ingyen Discord Nitro ajándék (kamu)'),
+    new SlashCommandBuilder().setName('mock').setDescription('Spongyabob gúnyolódó szöveg').addStringOption(o => o.setName('text').setDescription('A gúnyolandó szöveg').setRequired(true))
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
@@ -242,10 +247,16 @@ client.on('guildMemberAdd', async (m) => {
 });
 client.on('guildMemberRemove', (m) => updateStatus(m.guild));
 
-// PREFIX PARANCSOK (.sorsolas, .partner, .sima)
+// PREFIX PARANCSOK (.sorsolas, .partner, .sima) ÉS VÉLETLENSZERŰ REAKCIÓK
 client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.guild) return;
     const cmd = m.content.toLowerCase().trim();
+
+    // 1.5% esély véletlenszerű troll reakcióra (🤡 vagy 🤓)
+    if (Math.random() < 0.015) {
+        const randEmoji = Math.random() < 0.5 ? '🤡' : '🤓';
+        m.react(randEmoji).catch(() => {});
+    }
 
     if (['.sorsolas', '.partner', '.sima'].includes(cmd)) {
         await m.delete().catch(() => {});
@@ -271,12 +282,39 @@ client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton()) return;
 
     if (i.isChatInputCommand()) {
+        // TROLL PARANCSOK
+        if (i.commandName === 'fakeban') {
+            const user = i.options.getUser('user');
+            const reason = i.options.getString('reason') || 'Nincs megadva';
+            const banEmbed = new EmbedBuilder().setColor('#ff0000').setTitle('🔨 Tag Kitiltva!').setDescription(`**Felhasználó:** <@${user.id}>\n**Indok:** ${reason}\n**Moderátor:** <@${i.user.id}>`);
+            await i.reply({ embeds: [banEmbed] });
+            setTimeout(async () => {
+                const jokeEmbed = new EmbedBuilder().setColor('#ffaa00').setTitle('🤡 CSAK VICCELTEM!').setDescription(`**<@${user.id}>** nem lett kitiltva, maradhatsz! 🎉`);
+                await i.editReply({ embeds: [jokeEmbed] }).catch(() => {});
+            }, 3000);
+            return;
+        }
+
+        if (i.commandName === 'nitro') {
+            const embed = new EmbedBuilder().setColor('#5865F2').setTitle('🎁 Discord Nitro Gift!').setDescription('Nyertél 1 hónap Discord Nitro-t! Kattints az alábbi gombra az átvételhez!').setThumbnail('https://i.imgur.com/264293f.png');
+            const btn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_fake_nitro').setLabel('🎁 Claim Nitro').setStyle(ButtonStyle.Success));
+            return i.reply({ embeds: [embed], components: [btn] });
+        }
+
+        if (i.commandName === 'mock') {
+            const text = i.options.getString('text');
+            const mocked = text.split('').map((char, idx) => idx % 2 === 0 ? char.toLowerCase() : char.toUpperCase()).join('');
+            return i.reply({ content: `${mocked} 🤡` });
+        }
+
+        // INVITES
         if (i.commandName === 'invites') {
             const user = i.options.getUser('user') || i.user;
             const data = await Invite.findOne({ guildId: i.guild.id, userId: user.id });
             return i.reply({ content: `📩 **${user.username}** eddig **${data ? data.invites : 0}** embert hívott meg!`, ephemeral: false });
         }
 
+        // TICKET PARANCSOK
         if (i.commandName === 'ticket') {
             const sub = i.options.getSubcommand();
             if (sub === 'setup') {
@@ -298,6 +336,7 @@ client.on('interactionCreate', async (i) => {
             }
         }
 
+        // GIVEAWAY
         if (i.commandName === 'giveaway') {
             const sub = i.options.getSubcommand();
 
@@ -365,6 +404,11 @@ client.on('interactionCreate', async (i) => {
     }
 
     if (i.isButton()) {
+        // TROLL NITRO GOMB KLIKK
+        if (i.customId === 'claim_fake_nitro') {
+            return i.reply({ content: `🎉 **<@${i.user.id}>** bedőlt a kamu Nitrónak és át lett verve! 🤡`, ephemeral: false });
+        }
+
         if (i.customId === 'open_ticket') {
             const name = `ticket-${i.user.username}`;
             if (i.guild.channels.cache.find(c => c.name === name.toLowerCase())) return i.reply({ content: `❌ Már van nyitott ticketed!`, ephemeral: true });
