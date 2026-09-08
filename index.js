@@ -359,7 +359,7 @@ const commands = [
     new SlashCommandBuilder().setName('work').setDescription('Munkavégzés pénzért (Egyenlegfüggő, 1 perc cooldown)'),
     new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Kinek az egyenlege?')),
     new SlashCommandBuilder().setName('stat').setDescription('Kaszinó statisztika lekérése').addUserOption(o => o.setName('user').setDescription('Kinek a statisztikája?')),
-    new SlashCommandBuilder().setName('hitel').setDescription('Banki hitel parancsok (15% kamat)')
+    new SlashCommandBuilder().setName('hitel').setDescription('Banki hitel parancsok (10% kamat)')
         .addSubcommand(s => s.setName('felvesz').setDescription('Hitel felvétele (max 50 millió Ft)').addIntegerOption(o => o.setName('osszeg').setDescription('Igényelt összeg (Ft)').setRequired(true).setMinValue(1).setMaxValue(50000000)))
         .addSubcommand(s => s.setName('statusz').setDescription('Aktuális hitel lekérése'))
         .addSubcommand(s => s.setName('torleszt').setDescription('Hitel visszafizetése').addIntegerOption(o => o.setName('osszeg').setDescription('Visszafizetendő összeg (Ft)').setRequired(true).setMinValue(1))),
@@ -506,10 +506,10 @@ client.on('interactionCreate', async (i) => {
             commandCooldowns.set(cooldownKey, Date.now());
         }
 
-        // Csak akkor tiltjuk le a kaszinót, ha a zsetonja teljesen elfogyott és MÍNUSZBA ment (nem pedig a hitel miatt)
+        // Csak akkor tiltjuk le a kaszinót, ha a zsetonja teljesen elfogyott és MÍNUSZBA ment
         if (['blackjack', 'mines'].includes(i.commandName)) {
             if (userDb.balance < 0) {
-                return i.reply({ content: `❌ **Kaszinózási tiltás!** Mivel aenleged mínuszba ment (**${formatFt(userDb.balance)}**), nem játszhatsz amíg dolgozással vagy befizetéssel egyenesbe nem jössz! 🚫`, ephemeral: true });
+                return i.reply({ content: `❌ **Kaszinózási tiltás!** Mivel az egyenleged mínuszba ment (**${formatFt(userDb.balance)}**), nem játszhatsz amíg dolgozással vagy befizetéssel egyenesbe nem jössz! 🚫`, ephemeral: true });
             }
         }
 
@@ -721,14 +721,14 @@ client.on('interactionCreate', async (i) => {
                     return i.reply({ content: `❌ Legfeljebb 50 000 000 Ft hitelt vehetsz fel!`, ephemeral: true });
                 }
 
-                // 15% kamat felszámítása a felvett összegre
-                const debtWithInterest = Math.floor(amount * 1.15);
+                // 10% kamat felszámítása a felvett összegre
+                const debtWithInterest = Math.floor(amount * 1.10);
 
                 userDb.balance += amount;
                 userDb.loanDebt = debtWithInterest; 
                 await userDb.save();
 
-                return i.reply({ content: `🏦 Sikeresen felvettél **${formatFt(amount)}** hitelt! Jóváírva az egyenlegeden.\n📈 **Kamat (15%):** ${formatFt(debtWithInterest - amount)}\n📋 **Összes visszafizetendő:** **${formatFt(debtWithInterest)}**\n\n*Jó szórakozást a kaszinóban! 🎰*` });
+                return i.reply({ content: `🏦 Sikeresen felvettél **${formatFt(amount)}** hitelt! Jóváírva az egyenlegeden.\n📈 **Kamat (10%):** ${formatFt(debtWithInterest - amount)}\n📋 **Összes visszafizetendő:** **${formatFt(debtWithInterest)}**\n\n*Jó szórakozást a kaszinóban! 🎰*` });
             }
 
             if (sub === 'statusz') {
