@@ -214,10 +214,13 @@ const commands = [
         .addSubcommand(s => s.setName('sima').setDescription('Vissza az alapértelmezett kategóriába')),
     new SlashCommandBuilder().setName('invites').setDescription('Meghívók lekérése').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
     
-    // TROLL SLASH PARANCSOK
+    // TROLL SLASH PARANCSOK (STEALTH MÓD)
     new SlashCommandBuilder().setName('fakeban').setDescription('Troll kamu kitiltás').addUserOption(o => o.setName('user').setDescription('Kit tiltsunk ki kísérletképpen?').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('Indok')),
     new SlashCommandBuilder().setName('nitro').setDescription('Ingyen Discord Nitro ajándék (kamu)'),
-    new SlashCommandBuilder().setName('mock').setDescription('Spongyabob gúnyolódó szöveg').addStringOption(o => o.setName('text').setDescription('A gúnyolandó szöveg').setRequired(true))
+    new SlashCommandBuilder().setName('mock').setDescription('Spongyabob gúnyolódó szöveg').addStringOption(o => o.setName('text').setDescription('A gúnyolandó szöveg').setRequired(true)),
+    new SlashCommandBuilder().setName('roulette').setDescription('Orosz rulett játék (1/6 esély 1 perces némításra)'),
+    new SlashCommandBuilder().setName('iq').setDescription('IQ teszt mérés').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
+    new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').addUserOption(o => o.setName('user').setDescription('Kinek szóljon az oltás?').setRequired(true))
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
@@ -247,7 +250,7 @@ client.on('guildMemberAdd', async (m) => {
 });
 client.on('guildMemberRemove', (m) => updateStatus(m.guild));
 
-// PREFIX PARANCSOK (.sorsolas, .partner, .sima) ÉS VÉLETLENSZERŰ REAKCIÓK
+// PREFIX PARANCSOK, VÉLETLENSZERŰ REAKCIÓK ÉS AUTOMATA MÉM VÁLASZOK
 client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.guild) return;
     const cmd = m.content.toLowerCase().trim();
@@ -256,6 +259,13 @@ client.on('messageCreate', async (m) => {
     if (Math.random() < 0.015) {
         const randEmoji = Math.random() < 0.5 ? '🤡' : '🤓';
         m.react(randEmoji).catch(() => {});
+    }
+
+    // AUTOMATA MÉM SZÓFIGYELŐ
+    if (cmd === 'mikor') {
+        return m.reply('Majd ha piros hó esik! 🤡').catch(() => {});
+    } else if (cmd === 'miért' || cmd === 'miert') {
+        return m.reply('Mert csak! 🤫').catch(() => {});
     }
 
     if (['.sorsolas', '.partner', '.sima'].includes(cmd)) {
@@ -282,29 +292,78 @@ client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton()) return;
 
     if (i.isChatInputCommand()) {
-        // TROLL PARANCSOK
-        if (i.commandName === 'fakeban') {
-            const user = i.options.getUser('user');
-            const reason = i.options.getString('reason') || 'Nincs megadva';
-            const banEmbed = new EmbedBuilder().setColor('#ff0000').setTitle('🔨 Tag Kitiltva!').setDescription(`**Felhasználó:** <@${user.id}>\n**Indok:** ${reason}\n**Moderátor:** <@${i.user.id}>`);
-            await i.reply({ embeds: [banEmbed] });
-            setTimeout(async () => {
-                const jokeEmbed = new EmbedBuilder().setColor('#ffaa00').setTitle('🤡 CSAK VICCELTEM!').setDescription(`**<@${user.id}>** nem lett kitiltva, maradhatsz! 🎉`);
-                await i.editReply({ embeds: [jokeEmbed] }).catch(() => {});
-            }, 3000);
+
+        // LOPAKODÓ MÓD (STEALTH): Eltünteti a gray "X használta ezt: /command" fejlécet!
+        if (['fakeban', 'nitro', 'mock', 'roulette', 'iq', 'roast'].includes(i.commandName)) {
+            await i.deferReply({ ephemeral: true });
+
+            if (i.commandName === 'fakeban') {
+                const user = i.options.getUser('user');
+                const reason = i.options.getString('reason') || 'Nincs megadva';
+                const banEmbed = new EmbedBuilder().setColor('#ff0000').setTitle('🔨 Tag Kitiltva!').setDescription(`**Felhasználó:** <@${user.id}>\n**Indok:** ${reason}\n**Moderátor:** Adminisztráció`);
+                const msg = await i.channel.send({ embeds: [banEmbed] });
+                await i.deleteReply().catch(() => {});
+
+                setTimeout(async () => {
+                    const jokeEmbed = new EmbedBuilder().setColor('#ffaa00').setTitle('🤡 CSAK VICCELTEM!').setDescription(`**<@${user.id}>** nem lett kitiltva, maradhatsz! 🎉`);
+                    await msg.edit({ embeds: [jokeEmbed] }).catch(() => {});
+                }, 3000);
+            }
+
+            else if (i.commandName === 'nitro') {
+                const embed = new EmbedBuilder().setColor('#5865F2').setTitle('🎁 Discord Nitro Gift!').setDescription('Nyertél 1 hónap Discord Nitro-t! Kattints az alábbi gombra az átvételhez!').setThumbnail('https://i.imgur.com/264293f.png');
+                const btn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_fake_nitro').setLabel('🎁 Claim Nitro').setStyle(ButtonStyle.Success));
+                await i.channel.send({ embeds: [embed], components: [btn] });
+                await i.deleteReply().catch(() => {});
+            }
+
+            else if (i.commandName === 'mock') {
+                const text = i.options.getString('text');
+                const mocked = text.split('').map((char, idx) => idx % 2 === 0 ? char.toLowerCase() : char.toUpperCase()).join('');
+                await i.channel.send({ content: `${mocked} 🤡` });
+                await i.deleteReply().catch(() => {});
+            }
+
+            else if (i.commandName === 'roulette') {
+                const isShot = Math.floor(Math.random() * 6) === 0; // 1/6 esély
+                if (isShot) {
+                    await i.member.timeout(60 * 1000, 'Orosz rulett vesztes').catch(() => {});
+                    await i.channel.send({ content: `💥 **BANG!** <@${i.user.id}> meghúzta a ravaszt, a fegyver eldördült! (1 perc némítás) 🪦` });
+                } else {
+                    await i.channel.send({ content: `*KIKK...* <@${i.user.id}> meghúzta a ravaszt, de a fegyver nem sült el. Túlélte! 🎯` });
+                }
+                await i.deleteReply().catch(() => {});
+            }
+
+            else if (i.commandName === 'iq') {
+                const target = i.options.getUser('user') || i.user;
+                const iqVal = Math.floor(Math.random() * 251) - 50; // -50 től 200 ig
+                let comment = "Átlagos elme.";
+                if (iqVal < 0) comment = "Néha elfelejt levegőt venni. 🧠❌";
+                else if (iqVal < 50) comment = "A gombalevest is villával eszi. 🥣";
+                else if (iqVal < 100) comment = "Nem a legélesebb kés a fiókban, de igyekszik. 🗡️";
+                else if (iqVal < 140) comment = "Kifejezetten okos koponya! 💡";
+                else comment = "Albert Einstein titkos leszármazottja! ⚛️";
+
+                await i.channel.send({ content: `🧠 **<@${target.id}>** IQ teszt eredménye: **${iqVal} IQ**\n*Értékelés:* ${comment}` });
+                await i.deleteReply().catch(() => {});
+            }
+
+            else if (i.commandName === 'roast') {
+                const target = i.options.getUser('user');
+                const roasts = [
+                    "Mikor Isten az észt osztotta, te valószínűleg a sor végén álltál egy törött csészével. ☕",
+                    "Nem mondom, hogy lassan gondolkodsz, de az agyad még dial-up interneten fut. 🌐",
+                    "Olyan vagy, mint a felhős idő: ha eltűnsz, mindenkinek szebb lesz a napja. ☀️",
+                    "Ha az ostobaság fájna, egész nap üvöltenél. 🔊",
+                    "Az egyetlen dolog, ami gyorsabb nálad, az a lefelé ívelő karriered. 📉"
+                ];
+                const randomRoast = roasts[Math.floor(Math.random() * roasts.length)];
+                await i.channel.send({ content: `🔥 **<@${target.id}>**: ${randomRoast}` });
+                await i.deleteReply().catch(() => {});
+            }
+
             return;
-        }
-
-        if (i.commandName === 'nitro') {
-            const embed = new EmbedBuilder().setColor('#5865F2').setTitle('🎁 Discord Nitro Gift!').setDescription('Nyertél 1 hónap Discord Nitro-t! Kattints az alábbi gombra az átvételhez!').setThumbnail('https://i.imgur.com/264293f.png');
-            const btn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_fake_nitro').setLabel('🎁 Claim Nitro').setStyle(ButtonStyle.Success));
-            return i.reply({ embeds: [embed], components: [btn] });
-        }
-
-        if (i.commandName === 'mock') {
-            const text = i.options.getString('text');
-            const mocked = text.split('').map((char, idx) => idx % 2 === 0 ? char.toLowerCase() : char.toUpperCase()).join('');
-            return i.reply({ content: `${mocked} 🤡` });
         }
 
         // INVITES
