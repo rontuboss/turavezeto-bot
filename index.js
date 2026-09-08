@@ -70,7 +70,7 @@ function drawWinners(participants, count) {
     return winners;
 }
 
-const updateStatus = (g) => g && client.user.setPresence({ activities: [{ name: `👥 ${g.memberCount} tag | /mines`, type: 4 }], status: 'online' });
+const updateStatus = (g) => g && client.user.setPresence({ activities: [{ name: `👥 ${g.memberCount} tag | /blackjack`, type: 4 }], status: 'online' });
 
 // ==========================================
 // 4. TICKET MANAGEMENT
@@ -441,28 +441,28 @@ client.on('interactionCreate', async (i) => {
 
                 const embed = new EmbedBuilder()
                     .setColor('#ffd700')
-                    .setTitle('🃏 BLACKJACK! ♠️♥️♦️♣️')
-                    .setDescription('✨ **Gratulálok, sima Blackjack!** ✨')
+                    .setTitle('♠️ KASZINÓ BLACKJACK ASZTAL ♣️')
+                    .setDescription('✨ **BLACKJACK! Azonnali főnyeremény!** ✨')
                     .addFields(
-                        { name: '🧑 Te lapjaid', value: `${playerCards.map(c => c.display).join(', ')} (Érték: **${playerSum}**)`, inline: false },
-                        { name: '🤖 Osztó lapjai', value: `${dealerCards.map(c => c.display).join(', ')} (Érték: **${dealerSum}**)`, inline: false },
-                        { name: '💰 Nyeremény', value: `\`\`\`+${formatFt(winAmount)}\`\`\``, inline: true }
+                        { name: '🧑 Játékos lapjai', value: `\`\`\`css\n${playerCards.map(c => c.display).join(' ')} (Összeg: ${playerSum})\`\`\``, inline: false },
+                        { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${dealerCards.map(c => c.display).join(' ')} (Összeg: ${dealerSum})\`\`\``, inline: false },
+                        { name: '💰 Nyeremény', value: `\`\`\`diff\n+${formatFt(winAmount)}\`\`\``, inline: true }
                     );
                 return i.reply({ embeds: [embed] });
             }
 
             const embed = new EmbedBuilder()
                 .setColor('#2f3136')
-                .setTitle('🃏 BLACKJACK ASZTAL')
+                .setTitle('♠️ KASZINÓ BLACKJACK ASZTAL ♣️')
                 .addFields(
-                    { name: '🧑 Te lapjaid', value: `${playerCards.map(c => c.display).join(', ')} (Érték: **${playerSum}**)`, inline: false },
-                    { name: '🤖 Osztó lapjai', value: `${dealerCards[0].display}, 🎴 (Rejtett)`, inline: false },
-                    { name: '💵 Tét', value: formatFt(bet), inline: true }
+                    { name: '🧑 Játékos lapjai', value: `\`\`\`css\n${playerCards.map(c => c.display).join(' ')} (Összeg: ${playerSum})\`\`\``, inline: false },
+                    { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${dealerCards[0].display} 🎴 (Rejtett)\`\`\``, inline: false },
+                    { name: '💵 Tét', value: `\`\`\`${formatFt(bet)}\`\`\``, inline: true }
                 );
 
             const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('bj_hit').setLabel('➕ Lapot (Hit)').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('bj_stand').setLabel('🛑 Megállás (Stand)').setStyle(ButtonStyle.Success)
+                new ButtonBuilder().setCustomId('bj_hit').setLabel('➕ Lapot kérlek (Hit)').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('bj_stand').setLabel('🛑 Megállok (Stand)').setStyle(ButtonStyle.Success)
             );
 
             const msg = await i.reply({ embeds: [embed], components: [row], fetchReply: true });
@@ -611,7 +611,7 @@ client.on('interactionCreate', async (i) => {
                 await i.deleteReply().catch(() => {});
                 setTimeout(() => msg.edit({ embeds: [new EmbedBuilder().setColor('#ffaa00').setTitle('🤡 CSAK VICCELTEM!').setDescription(`**<@${user.id}>** nem lett kitiltva, maradhatsz! 🎉`)] }).catch(() => {}), 3000);
             } else if (i.commandName === 'nitro') {
-                const embed = new EmbedBuilder().setColor('#5865F2').setTitle('🎁 Discord Nitro Gift!').setDescription('Nyertél 1 hónap Discord Nitro-t! Kattints az alábbi gombra az átvételhez!').setThumbnail('https://i.imgur.com/264293f.png');
+                const embed = new EmbedBuilder().setColor('#5865F2').setTitle('🎁 Discord Nitro Gift!').setDescription('Nyertél 1 hónap Discord Nitro-t! Kattints az alábbi gombra az átvételhez!').setThumbnail('[https://i.imgur.com/264293f.png](https://i.imgur.com/264293f.png)');
                 const btn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_fake_nitro').setLabel('🎁 Claim Nitro').setStyle(ButtonStyle.Success));
                 await i.channel.send({ embeds: [embed], components: [btn] });
                 await i.deleteReply().catch(() => {});
@@ -743,20 +743,20 @@ client.on('interactionCreate', async (i) => {
                         .setColor('#ff0000')
                         .setTitle('💥 TÚLHÚZTAD! (BUST)')
                         .addFields(
-                            { name: '🧑 Te lapjaid', value: `${game.playerCards.map(c => c.display).join(', ')} (Érték: **${playerSum}**)`, inline: false },
-                            { name: '🤖 Osztó lapjai', value: `${game.dealerCards.map(c => c.display).join(', ')} (Érték: **${calculateHand(game.dealerCards)}**)`, inline: false },
-                            { name: '💸 Elveszített tét', value: `\`\`\`-${formatFt(game.bet)}\`\`\``, inline: true }
+                            { name: '🧑 Játékos lapjai', value: `\`\`\`css\n${game.playerCards.map(c => c.display).join(' ')} (Összeg: ${playerSum})\`\`\``, inline: false },
+                            { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${game.dealerCards.map(c => c.display).join(' ')} (Összeg: ${calculateHand(game.dealerCards)})\`\`\``, inline: false },
+                            { name: '💸 Elveszített tét', value: `\`\`\`diff\n-${formatFt(game.bet)}\`\`\``, inline: true }
                         );
                     return i.update({ embeds: [loseEmbed], components: [] });
                 }
 
                 const embed = new EmbedBuilder()
                     .setColor('#2f3136')
-                    .setTitle('🃏 BLACKJACK ASZTAL')
+                    .setTitle('♠️ KASZINÓ BLACKJACK ASZTAL ♣️')
                     .addFields(
-                        { name: '🧑 Te lapjaid', value: `${game.playerCards.map(c => c.display).join(', ')} (Érték: **${playerSum}**)`, inline: false },
-                        { name: '🤖 Osztó lapjai', value: `${game.dealerCards[0].display}, 🎴 (Rejtett)`, inline: false },
-                        { name: '💵 Tét', value: formatFt(game.bet), inline: true }
+                        { name: '🧑 Játékos lapjai', value: `\`\`\`css\n${game.playerCards.map(c => c.display).join(' ')} (Összeg: ${playerSum})\`\`\``, inline: false },
+                        { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${game.dealerCards[0].display} 🎴 (Rejtett)\`\`\``, inline: false },
+                        { name: '💵 Tét', value: `\`\`\`${formatFt(game.bet)}\`\`\``, inline: true }
                     );
                 return i.update({ embeds: [embed] });
             }
@@ -792,12 +792,12 @@ client.on('interactionCreate', async (i) => {
 
                 const finalEmbed = new EmbedBuilder()
                     .setColor(embedColor)
-                    .setTitle('🃏 BLACKJACK - EREDMÉNY')
+                    .setTitle('♠️ BLACKJACK - VÉGEREDMÉNY ♣️')
                     .setDescription(resultText)
                     .addFields(
-                        { name: '🧑 Te lapjaid', value: `${game.playerCards.map(c => c.display).join(', ')} (Érték: **${playerSum}**)`, inline: false },
-                        { name: '🤖 Osztó lapjai', value: `${game.dealerCards.map(c => c.display).join(', ')} (Érték: **${dealerSum}**)`, inline: false },
-                        { name: '💳 Új egyenleged', value: formatFt(uDb.balance), inline: true }
+                        { name: '🧑 Játékos lapjai', value: `\`\`\`css\n${game.playerCards.map(c => c.display).join(' ')} (Összeg: ${playerSum})\`\`\``, inline: false },
+                        { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${game.dealerCards.map(c => c.display).join(' ')} (Összeg: ${dealerSum})\`\`\``, inline: false },
+                        { name: '💳 Új egyenleged', value: `\`\`\`${formatFt(uDb.balance)}\`\`\``, inline: true }
                     );
                 return i.update({ embeds: [finalEmbed], components: [] });
             }
