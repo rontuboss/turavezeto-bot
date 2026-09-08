@@ -98,6 +98,36 @@ const GPUS = {
     quantum: { id: 'quantum', name: 'Quantum Miner Rig X-1', rarity: 'mythic', price: 100000000, btcPerHour: 0.054000 }
 };
 
+// Meglévő felhasználói kártyák automatikus frissítése a legújabb értékekre
+async function syncUserGpuStats() {
+    try {
+        const users = await User.find({ "rigs.0": { $exists: true } });
+        let updatedCount = 0;
+
+        for (const user of users) {
+            let isModified = false;
+            for (let i = 0; i < user.rigs.length; i++) {
+                const rig = user.rigs[i];
+                const latestGpu = GPUS[rig.gpuId];
+                if (latestGpu && rig.btcPerHour !== latestGpu.btcPerHour) {
+                    rig.btcPerHour = latestGpu.btcPerHour;
+                    rig.name = latestGpu.name;
+                    isModified = true;
+                }
+            }
+            if (isModified) {
+                await user.save();
+                updatedCount++;
+            }
+        }
+        if (updatedCount > 0) {
+            console.log(`🔄 ${updatedCount} felhasználó meglévő videokártyái sikeresen frissítve lettek a legújabb értékekre!`);
+        }
+    } catch (err) {
+        console.error('❌ Hiba a videokártyák szinkronizálásakor:', err);
+    }
+}
+
 // ==========================================
 // 4. HELPER & TIME FUNCTIONS
 // ==========================================
@@ -507,6 +537,9 @@ client.once('ready', async () => {
         console.log('✅ Szerver-specifikus Slash parancsok frissítve!');
     } catch (err) { console.error('❌ Hiba a parancsok regisztrációjánál:', err); }
 
+    // Meglévő kártyák frissítése az adatbázisban indításkor
+    await syncUserGpuStats();
+
     updateStatus(client.guilds.cache.first());
 
     const active = await Giveaway.find({ ended: false });
@@ -633,7 +666,6 @@ client.on('interactionCreate', async (i) => {
                 const history = settings.btcHistory || [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE];
                 const currentPrice = settings.btcPriceFt;
 
-                // Előzmények formázása színes mutatókkal
                 let historyText = '';
                 let tempComparePrice = currentPrice;
 
