@@ -188,9 +188,10 @@ setInterval(async () => {
         lastTriggeredMinute = timeStr;
         const channel = client.channels.cache.get(CONFIG.REMINDER_CHANNEL);
         if (channel) {
+            const alertEmoji = channel.guild?.emojis.cache.find(e => e.name.toLowerCase() === 'alert') || '🚨';
             const count = Math.floor(Math.random() * 4) + 5; // 5-8 ping
             for (let i = 0; i < count; i++) {
-                await channel.send({ content: `<@&${CONFIG.REMINDER_ROLE}> ⏰ **Emlékeztető!**` }).catch(() => {});
+                await channel.send({ content: `${alertEmoji} 🚨 **RIASZTÁS! MEGY A VÁNDORKERESKEDŐ!** 🚨 ${alertEmoji}\n<@&${CONFIG.REMINDER_ROLE}>` }).catch(() => {});
                 await new Promise(resolve => setTimeout(resolve, 1500));
             }
         }
@@ -248,9 +249,10 @@ client.on('messageCreate', async (m) => {
         if (!m.member.permissions.has(PermissionFlagsBits.ManageChannels)) return;
         const channel = client.channels.cache.get(CONFIG.REMINDER_CHANNEL);
         if (channel) {
+            const alertEmoji = channel.guild?.emojis.cache.find(e => e.name.toLowerCase() === 'alert') || '🚨';
             const count = Math.floor(Math.random() * 4) + 5; // 5-8 ping
             for (let i = 0; i < count; i++) {
-                await channel.send({ content: `<@&${CONFIG.REMINDER_ROLE}> ⏰ **Emlékeztető! (TESZT PING)**` }).catch(() => {});
+                await channel.send({ content: `${alertEmoji} 🚨 **RIASZTÁS! MEGY A VÁNDORKERESKEDŐ! (TESZT PING)** 🚨 ${alertEmoji}\n<@&${CONFIG.REMINDER_ROLE}>` }).catch(() => {});
                 await new Promise(resolve => setTimeout(resolve, 1500));
             }
         }
