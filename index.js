@@ -76,7 +76,7 @@ const activeBlackjack = new Map();
 const commandCooldowns = new Map();
 
 // ==========================================
-// 3. HARDVER ÉS SZOBA ADATOK (+50% BTC TERMELÉS)
+// 3. HARDVER ÉS SZOBA ADATOK (2X KÁRTYA TERMELÉS)
 // ==========================================
 const ROOMS = {
     alagsor: { name: '📦 Alagsori Doboz', price: 500000, maxGpus: 4 },
@@ -86,16 +86,16 @@ const ROOMS = {
 };
 
 const GPUS = {
-    gt1030: { id: 'gt1030', name: 'NVIDIA GT 1030', rarity: 'common', price: 50000, btcPerHour: 0.000006 },
-    rx550: { id: 'rx550', name: 'AMD Radeon RX 550', rarity: 'common', price: 75000, btcPerHour: 0.000009 },
-    gtx1060: { id: 'gtx1060', name: 'NVIDIA GTX 1060 6GB', rarity: 'rare', price: 300000, btcPerHour: 0.000042 },
-    rx580: { id: 'rx580', name: 'AMD Radeon RX 580', rarity: 'rare', price: 450000, btcPerHour: 0.0000645 },
-    rtx3060ti: { id: 'rtx3060ti', name: 'NVIDIA RTX 3060 Ti', rarity: 'epic', price: 1500000, btcPerHour: 0.000255 },
-    rtx3080: { id: 'rtx3080', name: 'NVIDIA RTX 3080', rarity: 'epic', price: 3500000, btcPerHour: 0.000630 },
-    rtx4090: { id: 'rtx4090', name: 'NVIDIA RTX 4090', rarity: 'legendary', price: 10000000, btcPerHour: 0.002100 },
-    rx7900xtx: { id: 'rx7900xtx', name: 'AMD Radeon RX 7900 XTX', rarity: 'legendary', price: 12500000, btcPerHour: 0.002700 },
-    h100: { id: 'h100', name: 'NVIDIA H100 AI Accelerator', rarity: 'mythic', price: 45000000, btcPerHour: 0.011250 },
-    quantum: { id: 'quantum', name: 'Quantum Miner Rig X-1', rarity: 'mythic', price: 100000000, btcPerHour: 0.027000 }
+    gt1030: { id: 'gt1030', name: 'NVIDIA GT 1030', rarity: 'common', price: 50000, btcPerHour: 0.000012 },
+    rx550: { id: 'rx550', name: 'AMD Radeon RX 550', rarity: 'common', price: 75000, btcPerHour: 0.000018 },
+    gtx1060: { id: 'gtx1060', name: 'NVIDIA GTX 1060 6GB', rarity: 'rare', price: 300000, btcPerHour: 0.000084 },
+    rx580: { id: 'rx580', name: 'AMD Radeon RX 580', rarity: 'rare', price: 450000, btcPerHour: 0.000129 },
+    rtx3060ti: { id: 'rtx3060ti', name: 'NVIDIA RTX 3060 Ti', rarity: 'epic', price: 1500000, btcPerHour: 0.000510 },
+    rtx3080: { id: 'rtx3080', name: 'NVIDIA RTX 3080', rarity: 'epic', price: 3500000, btcPerHour: 0.001260 },
+    rtx4090: { id: 'rtx4090', name: 'NVIDIA RTX 4090', rarity: 'legendary', price: 10000000, btcPerHour: 0.004200 },
+    rx7900xtx: { id: 'rx7900xtx', name: 'AMD Radeon RX 7900 XTX', rarity: 'legendary', price: 12500000, btcPerHour: 0.005400 },
+    h100: { id: 'h100', name: 'NVIDIA H100 AI Accelerator', rarity: 'mythic', price: 45000000, btcPerHour: 0.022500 },
+    quantum: { id: 'quantum', name: 'Quantum Miner Rig X-1', rarity: 'mythic', price: 100000000, btcPerHour: 0.054000 }
 };
 
 // ==========================================
@@ -380,7 +380,6 @@ setInterval(async () => {
     const minute = bpDate.getMinutes();
     const hourStr = bpDate.getHours().toString();
 
-    // Pontosan 00 perc 00 másodperc környékén fut le egyszer óránként
     if (minute === 0 && lastTriggeredHour !== hourStr) {
         lastTriggeredHour = hourStr;
         
@@ -465,8 +464,9 @@ const commands = [
     new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addUserOption(o => o.setName('user').setDescription('Kinek szóljon?').setRequired(true)),
     new SlashCommandBuilder().setName('rate').setDescription('Értékelj bármit').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addStringOption(o => o.setName('thing').setDescription('Mit értékeljen?').setRequired(true)),
 
-    // KÜLÖNÁLLÓ /BTC PARANCS
-    new SlashCommandBuilder().setName('btc').setDescription('Bitcoin aktuális ára, 3 órás előzménye és eladás')
+    // KÜLÖNÁLLÓ /BTC PARANCS ( /BTC AR ÉS /BTC SELL SUBCOMMANDOKKAL )
+    new SlashCommandBuilder().setName('btc').setDescription('Bitcoin parancsok')
+        .addSubcommand(s => s.setName('ar').setDescription('Bitcoin aktuális ára Ft-ban és az előző 3 árfolyam változás'))
         .addSubcommand(s => s.setName('sell').setDescription('Bitcoin eladása készpénzért (Ft)').addNumberOption(o => o.setName('btc').setDescription('Eladandó BTC').setRequired(true))),
 
     // /MINER BOLT ÉS /CRYPTO PARANCSOK
@@ -620,32 +620,51 @@ client.on('interactionCreate', async (i) => {
         }
 
         // ==========================================
-        // 📈 /BTC PARANCSOK (ÁRFOLYAM, ELŐZMÉNYEK ÉS ELADÁS)
+        // 📈 /BTC PARANCSOK ( /BTC AR ÉS /BTC SELL )
         // ==========================================
         if (i.commandName === 'btc') {
-            const sub = i.options.getSubcommand(false);
+            const sub = i.options.getSubcommand();
 
-            if (!sub) {
+            // /btc ar -> Jelenlegi Ár + Előző 3 Árfolyam Változás (Zöld / Piros)
+            if (sub === 'ar') {
                 const diffPercent = (((settings.btcPriceFt - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
                 const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
                 
                 const history = settings.btcHistory || [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE];
-                const h1 = history[history.length - 1] || BASE_BTC_PRICE;
-                const h2 = history[history.length - 2] || BASE_BTC_PRICE;
-                const h3 = history[history.length - 3] || BASE_BTC_PRICE;
+                const currentPrice = settings.btcPriceFt;
+
+                // Előzmények formázása színes mutatókkal
+                let historyText = '';
+                let tempComparePrice = currentPrice;
+
+                for (let idx = history.length - 1; idx >= 0; idx--) {
+                    const pastPrice = history[idx];
+                    const diff = tempComparePrice - pastPrice;
+                    const hoursAgo = history.length - idx;
+
+                    if (diff > 0) {
+                        historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (🟢 \`+${formatFt(diff)}\`)\n`;
+                    } else if (diff < 0) {
+                        historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (🔴 \`-${formatFt(Math.abs(diff))}\`)\n`;
+                    } else {
+                        historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (⚪ \`0 Ft\`)\n`;
+                    }
+                    tempComparePrice = pastPrice;
+                }
 
                 const embed = new EmbedBuilder()
-                    .setColor('#f7931a')
-                    .setTitle('📈 BITCOIN PIACI ÁRFOLYAM & ELŐZMÉNYEK')
+                    .setColor(diffPercent >= 0 ? '#2ecc71' : '#e74c3c')
+                    .setTitle('📈 BITCOIN ÁRFOLYAM & PIACI ELŐZMÉNYEK')
                     .addFields(
                         { name: '🪙 Jelenlegi Árfolyam', value: `**1 BTC = ${formatFt(settings.btcPriceFt)}**`, inline: false },
-                        { name: '📊 Változás (Alapárhoz képest)', value: `\`\`\`diff\n${diffTag}\`\`\``, inline: false },
-                        { name: '🕰️ Elmúlt 3 Óra Árfolyama', value: `• **1 órája:** ${formatFt(h1)}\n• **2 órája:** ${formatFt(h2)}\n• **3 órája:** ${formatFt(h3)}`, inline: false }
+                        { name: '📊 Összesített Változás (Alapárhoz képest)', value: `\`\`\`diff\n${diffTag}\`\`\``, inline: false },
+                        { name: '🕰️ Elmúlt 3 Óra Árfolyamai & Változásai', value: historyText || 'Még nincs elég előzmény adat.', inline: false }
                     );
 
                 return i.reply({ embeds: [embed] });
             }
 
+            // /btc sell -> Bitcoin eladás készpénzre
             if (sub === 'sell') {
                 const amount = i.options.getNumber('btc');
                 if ((userDb.btcBalance || 0) < amount) {
@@ -873,7 +892,7 @@ client.on('interactionCreate', async (i) => {
         }
 
         // ==========================================
-        // 👷 /WORK (5%-KAL CSÖKKENTETT FIZETÉS)
+        // 👷 /WORK (PONTOSAN A FELÉRE CSÖKKENTETT FIZETÉS - 50%)
         // ==========================================
         if (i.commandName === 'work') {
             const now = Date.now();
@@ -883,11 +902,11 @@ client.on('interactionCreate', async (i) => {
                 return i.reply({ content: `⏳ Pihenj még **${remainingSec} másodpercet** a következő munka előtt.`, ephemeral: true });
             }
 
-            // Alapfizetés és bónusz 5%-os csökkentése (0.95-ös szorzó)
-            const baseMin = Math.floor(3750 * 0.95); // ~3,562 Ft
-            const baseMax = Math.floor(12500 * 0.95); // ~11,875 Ft
+            // Alapfizetés és bónusz felezése (0.50-es szorzó)
+            const baseMin = Math.floor(3750 * 0.50); // 1,875 Ft
+            const baseMax = Math.floor(12500 * 0.50); // 6,250 Ft
             const randomBase = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
-            const balanceBonus = Math.floor(Math.max(0, userDb.balance) * 0.00475); // 0.5% helyett 0.475%
+            const balanceBonus = Math.floor(Math.max(0, userDb.balance) * 0.0025); // 0.5% helyett 0.25%
             const workAmount = randomBase + balanceBonus;
 
             userDb.balance += workAmount;
