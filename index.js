@@ -23,7 +23,14 @@ mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log('✅ Adatbázis csatlakoztatva!'))
     .catch(err => console.error('❌ DB hiba:', err));
 
-const User = mongoose.model('User', new mongoose.Schema({ guildId: String, userId: String, balance: { type: Number, default: 0 }, lastTreasure: { type: Number, default: 0 } }));
+const User = mongoose.model('User', new mongoose.Schema({ 
+    guildId: String, 
+    userId: String, 
+    balance: { type: Number, default: 0 }, 
+    lastTreasure: { type: Number, default: 0 },
+    lastDaily: { type: Number, default: 0 },
+    lastWork: { type: Number, default: 0 }
+}));
 const Invite = mongoose.model('Invite', new mongoose.Schema({ guildId: String, userId: String, invites: Number }));
 const Giveaway = mongoose.model('Giveaway', new mongoose.Schema({ messageId: String, channelId: String, guildId: String, endTime: Number, prize: String, winnerCount: Number, boosterBonus: Number, ended: { type: Boolean, default: false } }));
 
@@ -41,7 +48,7 @@ const commandCooldowns = new Map();
 
 // --- SEGÉDFÜGGVÉNYEK ---
 const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' Ft';
-const getUserDb = async (guildId, userId) => await User.findOne({ guildId, userId }) || new User({ guildId, userId, balance: 0, lastTreasure: 0 });
+const getUserDb = async (guildId, userId) => await User.findOne({ guildId, userId }) || new User({ guildId, userId, balance: 0, lastTreasure: 0, lastDaily: 0, lastWork: 0 });
 
 function drawWinners(participants, count) {
     const winners = [];
@@ -125,16 +132,13 @@ async function moveTicketCategory(channel, guild, type) {
     return { categoryName: type === 'sorsolas' ? 'Nyereményjáték' : 'Partner' };
 }
 
-// --- MINES LASSABB, BIZTONSÁGOSABB SZORZÓ SZÁMÍTÁS ---
+// --- MINES SZORZÓ SZÁMÍTÁS ---
 function getMinesMultiplier(totalTiles, bombs, revealed) {
-    if (revealed === 0) return 1.00;
-    // Új, sokkal szelídebb szorzó képlet, hogy ne szaladjon el az egyenleg
-    let mult = 1.0;
+    let mult = 0.96; 
     for (let i = 0; i < revealed; i++) {
-        const riskFactor = (totalTiles - i) / (totalTiles - bombs - i);
-        mult *= (1 + (riskFactor - 1) * 0.35); // Csökkentettuk a növekedési ütemet
+        mult *= (totalTiles - i) / (totalTiles - bombs - i);
     }
-    return Math.max(1.05, parseFloat(mult.toFixed(2)));
+    return Math.max(1.01, mult);
 }
 
 function buildMinesComponents(game, gameOver = false, won = false) {
@@ -285,6 +289,8 @@ const commands = [
     // TAG PARANCSOK
     new SlashCommandBuilder().setName('invites').setDescription('Meghívók lekérése').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
     new SlashCommandBuilder().setName('treasure').setDescription('Ingyen Forint kikérése (Boostereknek 7 perc, másnak 10 perc)'),
+    new SlashCommandBuilder().setName('daily').setDescription('Napi ingyen jutalom (100.000 Ft, éjfélimit)'),
+    new SlashCommandBuilder().setName('work').setDescription('Munkavégzés pénzért (3k - 10k Ft, 1 perc cooldown)'),
     new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Kinek az egyenlege?')),
     new SlashCommandBuilder().setName('utalas').setDescription('Pénz küldése másnak').addUserOption(o => o.setName('user').setDescription('Kinek?').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('Összeg (Ft)').setRequired(true).setMinValue(1)),
     new SlashCommandBuilder().setName('top').setDescription('A szerver leggazdagabb tagjai'),
@@ -362,7 +368,7 @@ client.on('interactionCreate', async (i) => {
         const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE);
         const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
 
-        const allowedForMembers = ['mines', 'iq', 'meret', 'treasure', 'bal', 'utalas', 'top', 'invites'];
+        const allowedForMembers = ['mines', 'iq', 'meret', 'treasure', 'daily', 'work', 'bal', 'utalas', 'top', 'invites'];
 
         if (!isMember) {
             return i.reply({ content: '❌ Nincs meg a szükséges rangod a parancsok használatához!', ephemeral: true });
@@ -384,6 +390,55 @@ client.on('interactionCreate', async (i) => {
                 return i.reply({ content: `⏳ Ezt a parancsot csak 1 percenként használhatod! Várj még **${remainingSec} másodpercet**.`, ephemeral: true });
             }
             commandCooldowns.set(cooldownKey, Date.now());
+        }
+
+        // --- DAILY PARANCS (100k, éjféli reset) ---
+        if (i.commandName === 'daily') {
+            const now = new Date();
+            const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+            if (userDb.lastDaily >= todayMidnight) {
+                // Kiszámoljuk hány óra és perc van holnap éjfélig
+                const tomorrowMidnight = todayMidnight + 24 * 60 * 60 * 1000;
+                const diffMs = tomorrowMidnight - now.getTime();
+                const hours = Math.floor(diffMs / (1000 * 60 * 60));
+                const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+
+                return i.reply({ content: `⏳ Már felvetted a mai napi jutalmat! Következő alkalom holnap éjfél után. Várj még **${hours} órát és ${minutes} percet**.` });
+            }
+
+            const dailyAmount = 100000;
+            userDb.balance += dailyAmount;
+            userDb.lastDaily = now.getTime();
+            await userDb.save();
+
+            return i.reply({ content: `🎁 Sikeresen felvedd a mai napi jutalmat: **${formatFt(dailyAmount)}** jóváírva az egyenlegeden! 🎉` });
+        }
+
+        // --- WORK PARANCS (3k - 10k, 1 perc cooldown) ---
+        if (i.commandName === 'work') {
+            const now = Date.now();
+            const cd = 60 * 1000; // 1 perc
+
+            if (now - userDb.lastWork < cd) {
+                const remainingSec = Math.ceil((cd - (now - userDb.lastWork)) / 1000);
+                return i.reply({ content: `⏳ Túl sokat dolgozol! Pihenj még **${remainingSec} másodpercet** a következő munka előtt.`, ephemeral: true });
+            }
+
+            const workAmount = Math.floor(Math.random() * 7001) + 3000; // 3000 és 10000 között
+            userDb.balance += workAmount;
+            userDb.lastWork = now;
+            await userDb.save();
+
+            const jobs = [
+                `Sikeresen kiszállítottál egy csomagot, és kaptál **${formatFt(workAmount)}**-ot! 📦`,
+                `Ledolgoztál egy műszakot a vándorkereskedőnél, a fizetésed: **${formatFt(workAmount)}**! 🛒`,
+                `Felsöpörtél a kaszinóban, a jutalmad: **${formatFt(workAmount)}**! 🧹`,
+                `Besegítettél a szerver karbantartásába, kaptál **${formatFt(workAmount)}**-ot! 🛠️`
+            ];
+            const randomJob = jobs[Math.floor(Math.random() * jobs.length)];
+
+            return i.reply({ content: randomJob });
         }
 
         if (i.commandName === 'treasure') {
@@ -510,7 +565,7 @@ client.on('interactionCreate', async (i) => {
                     await i.member.timeout(60 * 1000, 'Orosz rulett vesztes').catch(() => {});
                     await i.channel.send({ content: `💥 **BANG!** <@${i.user.id}> meghúzta a ravaszt, a fegyver eldördült! (1 perc némítás) 🪦` });
                 } else {
-                    await i.channel.send({ content: `*KIKK...* <@${i.user.id}> meghúzta a ravaszt, a fegyver nem sült el. Túlélte! 🎯` });
+                    await i.channel.send({ content: `*KIKK...* <@${i.user.id}> meghúzta a ravaszt, de a fegyver nem sült el. Túlélte! 🎯` });
                 }
                 await i.deleteReply().catch(() => {});
             }
