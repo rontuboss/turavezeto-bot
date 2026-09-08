@@ -578,27 +578,35 @@ client.on('interactionCreate', async (i) => {
         if (i.commandName === 'mines') {
             await i.deferReply();
 
-            const bet = i.options.getInteger('bet');
-            const bombs = i.options.getInteger('bombs');
-            if (userDb.balance < bet) return i.editReply({ content: '❌ Nincs elég egyenleged a játék elindításához!' });
+            try {
+                const bet = i.options.getInteger('bet');
+                const bombs = i.options.getInteger('bombs');
 
-            userDb.balance -= bet;
-            await userDb.save();
+                if (userDb.balance < bet) {
+                    return i.editReply({ content: '❌ Nincs elég egyenleged a játék elindításához!' });
+                }
 
-            const grid = Array(25).fill('💎');
-            let placed = 0;
-            while (placed < bombs) {
-                const rand = Math.floor(Math.random() * 25);
-                if (grid[rand] !== '💣') { grid[rand] = '💣'; placed++; }
+                userDb.balance -= bet;
+                await userDb.save();
+
+                const grid = Array(25).fill('💎');
+                let placed = 0;
+                while (placed < bombs) {
+                    const rand = Math.floor(Math.random() * 25);
+                    if (grid[rand] !== '💣') { grid[rand] = '💣'; placed++; }
+                }
+
+                const game = { userId: i.user.id, bet, bombs, grid, revealed: [] };
+                const embed = createMinesEmbed(bet, bombs, 0, 1.00, bet);
+                const rows = buildMinesComponents(game);
+
+                const msg = await i.editReply({ embeds: [embed], components: rows });
+                game.msgId = msg.id;
+        activeMines.set(msg.id, game);
+            } catch (error) {
+                console.error('Hiba a /mines parancsban:', error);
+                await i.editReply({ content: `❌ Hiba történt a játék indításakor: \`${error.message}\`` }).catch(() => {});
             }
-
-            const game = { userId: i.user.id, bet, bombs, grid, revealed: [] };
-            const embed = createMinesEmbed(bet, bombs, 0, 1.00, bet);
-            const rows = buildMinesComponents(game);
-
-            const msg = await i.editReply({ embeds: [embed], components: rows });
-            game.msgId = msg.id;
-            activeMines.set(msg.id, game);
             return;
         }
 
