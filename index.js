@@ -38,6 +38,7 @@ const User = mongoose.model('User', new mongoose.Schema({
     loanDebt: { type: Number, default: 0 },
     btcBalance: { type: Number, default: 0 },
     roomType: { type: String, default: 'alagsor' },
+    coolerType: { type: String, default: 'stock' },
     rigs: [{ gpuId: String, name: String, btcPerHour: Number }],
     isBroken: { type: Boolean, default: false },
     repairUntil: { type: Number, default: 0 },
@@ -76,16 +77,23 @@ const activeBlackjack = new Map();
 const commandCooldowns = new Map();
 
 // ==========================================
-// 3. HARDVER ÉS SZOBA ADATOK (MEGEMELT KRIPTO TERMELÉS A BALANCE MIATT)
+// 3. HARDVER, SZOBA ÉS HŰTŐ ADATOK
 // ==========================================
 const ROOMS = {
-    alagsor: { name: '📦 Alagsori Doboz', price: 500000, maxGpus: 4 },
-    garazs: { name: '🏠 Garázs Rig', price: 5000000, maxGpus: 12 },
-    szerver: { name: '🏢 Hivatalos Szerverterem', price: 35000000, maxGpus: 25 },
-    adatkozpont: { name: '⚡ Ipari Adatközpont', price: 150000000, maxGpus: 50 }
+    alagsor: { name: '📦 Alagsori Doboz', price: 500000, maxGpus: 4, failChance: 0.12, multiplier: 1.0 },
+    garazs: { name: '🏠 Garázs Rig', price: 5000000, maxGpus: 12, failChance: 0.08, multiplier: 1.10 },
+    szerver: { name: '🏢 Hivatalos Szerverterem', price: 35000000, maxGpus: 25, failChance: 0.05, multiplier: 1.25 },
+    adatkozpont: { name: '⚡ Ipari Adatközpont', price: 150000000, maxGpus: 50, failChance: 0.03, multiplier: 1.50 }
 };
 
-// Megemeltük a kártyák BTC/óra termelését, hogy megelőzzék a sima munkát!
+const COOLERS = {
+    stock: { id: 'stock', name: '❄️ Gyári Léghűtés', price: 0, failReduce: 0 },
+    dual_fan: { id: 'dual_fan', name: '🌀 Dupla Ventilátoros Hűtés', price: 150000, failReduce: 0.01 },
+    water: { id: 'water', name: '🌊 Vízhűtéses AIO Rendszer', price: 1500000, failReduce: 0.02 },
+    ac_unit: { id: 'ac_unit', name: '❄️ Ipari Klímarendszer', price: 10000000, failReduce: 0.03 },
+    quantum_cooling: { id: 'quantum_cooling', name: '🧪 Kvantum Folyadékhűtés', price: 50000000, failReduce: 0.04 }
+};
+
 const GPUS = {
     gt1030: { id: 'gt1030', name: 'NVIDIA GT 1030', rarity: 'common', price: 50000, btcPerHour: 0.000036 },
     rx550: { id: 'rx550', name: 'AMD Radeon RX 550', rarity: 'common', price: 75000, btcPerHour: 0.000054 },
@@ -93,13 +101,12 @@ const GPUS = {
     rx580: { id: 'rx580', name: 'AMD Radeon RX 580', rarity: 'rare', price: 450000, btcPerHour: 0.000387 },
     rtx3060ti: { id: 'rtx3060ti', name: 'NVIDIA RTX 3060 Ti', rarity: 'epic', price: 1500000, btcPerHour: 0.001530 },
     rtx3080: { id: 'rtx3080', name: 'NVIDIA RTX 3080', rarity: 'epic', price: 3500000, btcPerHour: 0.003780 },
-    rtx4090: { id: 'rtx4090', name: 'NVIDIA RTX 4090', rarity: 'legendary', price: 10000000, btcPerHour: 0.012600 }, // ~441k Ft/óra kártyánként
+    rtx4090: { id: 'rtx4090', name: 'NVIDIA RTX 4090', rarity: 'legendary', price: 10000000, btcPerHour: 0.012600 },
     rx7900xtx: { id: 'rx7900xtx', name: 'AMD Radeon RX 7900 XTX', rarity: 'legendary', price: 12500000, btcPerHour: 0.016200 },
-    h100: { id: 'h100', name: 'NVIDIA H100 AI Accelerator', rarity: 'mythic', price: 45000000, btcPerHour: 0.067500 }, // ~2.36m Ft/óra kártyánként
-    quantum: { id: 'quantum', name: 'Quantum Miner Rig X-1', rarity: 'mythic', price: 100000000, btcPerHour: 0.162000 } // ~5.67m Ft/óra kártyánként
+    h100: { id: 'h100', name: 'NVIDIA H100 AI Accelerator', rarity: 'mythic', price: 45000000, btcPerHour: 0.067500 },
+    quantum: { id: 'quantum', name: 'Quantum Miner Rig X-1', rarity: 'mythic', price: 100000000, btcPerHour: 0.162000 }
 };
 
-// Meglévő felhasználói kártyák automatikus frissítése a legújabb értékekre
 async function syncUserGpuStats() {
     try {
         const users = await User.find({ "rigs.0": { $exists: true } });
@@ -122,10 +129,10 @@ async function syncUserGpuStats() {
             }
         }
         if (updatedCount > 0) {
-            console.log(`🔄 ${updatedCount} felhasználó meglévő videokártyái sikeresen frissítve lettek az új balance értékekre!`);
+            console.log(`🔄 ${updatedCount} felhasználó videokártyái sikeresen frissítve!`);
         }
     } catch (err) {
-        console.error('❌ Hiba a videokártyák szinkronizálásakor:', err);
+        console.error('❌ Hiba a kártyák szinkronizálásakor:', err);
     }
 }
 
@@ -432,17 +439,61 @@ setInterval(async () => {
 
                 settings.btcPriceFt = newPrice;
                 await settings.save();
+
+                // Üzenet a bányász csatornába az új árfolyamról
+                const minerCh = client.channels.cache.get(CONFIG.MINER_CHANNEL);
+                if (minerCh) {
+                    const diffPercent = (((newPrice - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
+                    const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
+                    const history = settings.btcHistory;
+                    
+                    let historyText = '';
+                    let tempComparePrice = newPrice;
+
+                    for (let idx = history.length - 1; idx >= 0; idx--) {
+                        const pastPrice = history[idx];
+                        const diff = tempComparePrice - pastPrice;
+                        const hoursAgo = history.length - idx;
+
+                        if (diff > 0) {
+                            historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (🟢 \`+${formatFt(diff)}\`)\n`;
+                        } else if (diff < 0) {
+                            historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (🔴 \`-${formatFt(Math.abs(diff))}\`)\n`;
+                        } else {
+                            historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (⚪ \`0 Ft\`)\n`;
+                        }
+                        tempComparePrice = pastPrice;
+                    }
+
+                    const btcEmbed = new EmbedBuilder()
+                        .setColor(diffPercent >= 0 ? '#2ecc71' : '#e74c3c')
+                        .setTitle('📊 ÓRÁNKÉNTI BITCOIN ÁRFOLYAM JELENTÉS')
+                        .addFields(
+                            { name: '🪙 Jelenlegi Árfolyam', value: `**1 BTC = ${formatFt(newPrice)}**`, inline: false },
+                            { name: '📈 Összesített Változás', value: `\`\`\`diff\n${diffTag}\`\`\``, inline: false },
+                            { name: '🕰️ Elmúlt 3 Óra Árfolyamai', value: historyText || 'Még nincs elég adat.', inline: false }
+                        );
+
+                    minerCh.send({ embeds: [btcEmbed] }).catch(() => {});
+                }
             }
 
+            // MEGHIBÁSODÁSI LOGIKA
             const users = await User.find({ "rigs.0": { $exists: true }, isBroken: false });
             for (const u of users) {
-                if (Math.random() < 0.01) {
+                const room = ROOMS[u.roomType || 'alagsor'];
+                const cooler = COOLERS[u.coolerType || 'stock'];
+                
+                // Kiszámítjuk a végleges hibasorozati esélyt (minimálisan 0.5% marad)
+                const finalFailChance = Math.max(0.005, room.failChance - cooler.failReduce);
+
+                if (Math.random() < finalFailChance) {
                     u.isBroken = true;
                     await u.save();
                     
                     const ch = client.channels.cache.get(CONFIG.MINER_CHANNEL);
                     if (ch) {
-                        ch.send(`⚡ 🚨 **ÁRAMSZÜNET / MEGHIBÁSODÁS!** <@${u.userId}> szerverterme leállt! Használd a \`/crypto szerviz\` parancsot a javításhoz!`).catch(() => {});
+                        ch.send(`⚡ 🚨 **TÚLMELEGEDÉS / MEGHIBÁSODÁS!** <@${u.userId}> szerverterme leállt! Használd a \`/crypto szerviz\` parancsot a javításhoz!`).catch(() => {});
                     }
                 }
             }
@@ -502,7 +553,7 @@ const commands = [
 
     // /MINER BOLT ÉS /CRYPTO PARANCSOK
     new SlashCommandBuilder().setName('miner').setDescription('Bányász bolt megnyitása')
-        .addSubcommand(s => s.setName('bolt').setDescription('Bányász bolt megnyitása (Kártyák és Szobák)')),
+        .addSubcommand(s => s.setName('bolt').setDescription('Bányász bolt megnyitása (Kártyák, Szobák, Hűtők)')),
 
     new SlashCommandBuilder().setName('crypto').setDescription('Bányász farm és szerverterem kezelés')
         .addSubcommand(s => s.setName('farm').setDescription('Saját szerverterem és rigek állapota'))
@@ -538,7 +589,6 @@ client.once('ready', async () => {
         console.log('✅ Szerver-specifikus Slash parancsok frissítve!');
     } catch (err) { console.error('❌ Hiba a parancsok regisztrációjánál:', err); }
 
-    // Meglévő kártyák frissítése az adatbázisban indításkor
     await syncUserGpuStats();
 
     updateStatus(client.guilds.cache.first());
@@ -712,7 +762,7 @@ client.on('interactionCreate', async (i) => {
         }
 
         // ==========================================
-        // 🛒 /MINER BOLT (BÁNYÁSZ BOLT)
+        // 🛒 /MINER BOLT
         // ==========================================
         if (i.commandName === 'miner') {
             const sub = i.options.getSubcommand();
@@ -723,12 +773,14 @@ client.on('interactionCreate', async (i) => {
                     .setDescription('Válassz az alábbi lehetőségek közül gombok segítségével!')
                     .addFields(
                         { name: '🖥️ Videokártyák', value: 'Vásárolj bányászkártyákat a kapacitásod erejéig!', inline: true },
-                        { name: '🏢 Szerverterem', value: 'Bővítsd a helyiségedet több férőhelyért!', inline: true }
+                        { name: '🏢 Szerverterem', value: 'Bővítsd a helyiségedet több férőhelyért és bónuszokért!', inline: true },
+                        { name: '🌀 Hűtőrendszer', value: 'Vásárolj hűtést a túlmelegedés ellen!', inline: true }
                     );
 
                 const row = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId(`miner_menu_gpus_${i.user.id}`).setLabel('🖥️ Videokártyák').setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId(`miner_menu_rooms_${i.user.id}`).setLabel('🏢 Szerverterem Bővítés').setStyle(ButtonStyle.Success)
+                    new ButtonBuilder().setCustomId(`miner_menu_rooms_${i.user.id}`).setLabel('🏢 Szerverterem Bővítés').setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId(`miner_menu_coolers_${i.user.id}`).setLabel('🌀 Hűtőrendszer').setStyle(ButtonStyle.Danger)
                 );
 
                 return i.reply({ embeds: [embed], components: [row], ephemeral: true });
@@ -743,13 +795,15 @@ client.on('interactionCreate', async (i) => {
 
             if (sub === 'farm') {
                 const roomInfo = ROOMS[userDb.roomType || 'alagsor'];
+                const coolerInfo = COOLERS[userDb.coolerType || 'stock'];
                 const gpuCount = userDb.rigs ? userDb.rigs.length : 0;
                 const now = Date.now();
                 const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
                 
                 let btcPerHourTotal = 0;
                 if (userDb.rigs && !userDb.isBroken) {
-                    btcPerHourTotal = userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0);
+                    const rawBtc = userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0);
+                    btcPerHourTotal = rawBtc * roomInfo.multiplier; // Szerverterem bónusz szorzó!
                 }
                 const minedBtc = hoursPassed * btcPerHourTotal;
 
@@ -763,17 +817,20 @@ client.on('interactionCreate', async (i) => {
                         userDb.repairUntil = 0;
                         await userDb.save();
                     } else {
-                        statusText = '⚡ **ÁRAMSZÜNET / MEGHIBÁSODÁS (Szerviz szükséges!)**';
+                        statusText = '⚡ **TÚLMELEGENDŐ / LEÁLLT (Szerviz szükséges!)**';
                     }
                 }
+
+                const finalFailChance = Math.max(0.5, ((roomInfo.failChance - coolerInfo.failReduce) * 100)).toFixed(1);
 
                 const embed = new EmbedBuilder()
                     .setColor('#00f2fe')
                     .setTitle(`⚡ ${i.user.username} Bányász Farmja`)
                     .addFields(
-                        { name: '🏢 Helyiség', value: `${roomInfo.name} (${gpuCount}/${roomInfo.maxGpus} kártya)`, inline: true },
+                        { name: '🏢 Helyiség', value: `${roomInfo.name} (${gpuCount}/${roomInfo.maxGpus} kártya)\n*Bónusz:* **+${Math.round((roomInfo.multiplier - 1) * 100)}% termelés**`, inline: true },
+                        { name: '🌀 Hűtés', value: `${coolerInfo.name}\n*Meghibásodási esély:* **${finalFailChance}% / óra**`, inline: true },
                         { name: '📊 Státusz', value: statusText, inline: true },
-                        { name: '📈 Termelés', value: `**${formatBtcWithFt(btcPerHourTotal, settings.btcPriceFt)}** / óra`, inline: false },
+                        { name: '📈 Végleges Termelés', value: `**${formatBtcWithFt(btcPerHourTotal, settings.btcPriceFt)}** / óra`, inline: false },
                         { name: '🪙 Begyűjthető Bitcoin', value: `**${formatBtcWithFt(minedBtc, settings.btcPriceFt)}**`, inline: false },
                         { name: '💳 Egyenlegeid', value: `• Wallet: **${formatBtcWithFt(userDb.btcBalance || 0, settings.btcPriceFt)}**\n• Cash: **${formatFt(userDb.balance)}**`, inline: false }
                     );
@@ -788,9 +845,12 @@ client.on('interactionCreate', async (i) => {
             if (sub === 'claim') {
                 if (userDb.isBroken) return i.reply({ content: '❌ A szervertermed jelenleg le van állva! Szervizelés szükséges.', ephemeral: true });
 
+                const roomInfo = ROOMS[userDb.roomType || 'alagsor'];
                 const now = Date.now();
                 const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
-                let btcPerHourTotal = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0) : 0;
+                
+                let rawBtc = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0) : 0;
+                let btcPerHourTotal = rawBtc * roomInfo.multiplier;
                 const minedBtc = hoursPassed * btcPerHourTotal;
 
                 if (minedBtc <= 0) return i.reply({ content: '❌ Még nincs begyűjthető Bitcoinod!', ephemeral: true });
@@ -922,9 +982,6 @@ client.on('interactionCreate', async (i) => {
             return i.reply({ content: `🌟 Sikeresen felvedd a heti nagylelkű jutalmat: **${formatFt(weeklyAmount)}** jóváírva az egyenlegeden! 🚀` });
         }
 
-        // ==========================================
-        // 👷 /WORK (BALANCE FIX: RÖGZÍTETT FIX ALAPFIZETÉS, NINCS GYORSULÓ BÓNUSZ)
-        // ==========================================
         if (i.commandName === 'work') {
             const now = Date.now();
             const cd = 60 * 1000;
@@ -933,7 +990,6 @@ client.on('interactionCreate', async (i) => {
                 return i.reply({ content: `⏳ Pihenj még **${remainingSec} másodpercet** a következő munka előtt.`, ephemeral: true });
             }
 
-            // Fix, tisztességes kezdő fizetés bónuszok nélkül (~10,000 Ft - 25,000 Ft / perc)
             const workAmount = Math.floor(Math.random() * (25000 - 10000 + 1)) + 10000;
 
             userDb.balance += workAmount;
@@ -950,6 +1006,9 @@ client.on('interactionCreate', async (i) => {
             return i.reply({ content: jobs[Math.floor(Math.random() * jobs.length)] });
         }
 
+        // ==========================================
+        // 🗝️ /TREASURE (CSÖKKENTETT JUTALOM A BALANCE MIATT)
+        // ==========================================
         if (i.commandName === 'treasure') {
             const now = Date.now();
             const isBooster = i.member?.roles?.cache?.has(CONFIG.BOOSTER_ROLE);
@@ -961,11 +1020,11 @@ client.on('interactionCreate', async (i) => {
             }
 
             const isSuperChest = Math.random() < 0.05;
-            const baseMin = 25000;
-            const baseMax = 60000;
+            const baseMin = 10000; // 25,000 helyett 10,000 Ft
+            const baseMax = 25000; // 60,000 helyett 25,000 Ft
             const randomBase = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
-            const balanceBonus = Math.floor(Math.max(0, userDb.balance) * 0.01);
-            const amount = isSuperChest ? 312500 + Math.floor(Math.max(0, userDb.balance) * 0.05) : randomBase + balanceBonus;
+            
+            const amount = isSuperChest ? 100000 : randomBase;
 
             userDb.balance += amount;
             userDb.lastTreasure = now;
@@ -1334,12 +1393,12 @@ client.on('interactionCreate', async (i) => {
             const embed = new EmbedBuilder()
                 .setColor('#00f2fe')
                 .setTitle('🏢 SZERVERTEREM BŐVÍTÉS')
-                .setDescription('Vásárolj nagyobb helyiséget, hogy több videokártyát tudj elhelyezni!')
+                .setDescription('Vásárolj nagyobb helyiséget több helyért, kevesebb meghibásodásért és extra bónuszért!')
                 .addFields(
-                    { name: '📦 Alagsori Doboz', value: 'Ár: **500 000 Ft** | Férőhely: **4 db**', inline: false },
-                    { name: '🏠 Garázs Rig', value: 'Ár: **5 000 000 Ft** | Férőhely: **12 db**', inline: false },
-                    { name: '🏢 Hivatalos Szerverterem', value: 'Ár: **35 000 000 Ft** | Férőhely: **25 db**', inline: false },
-                    { name: '⚡ Ipari Adatközpont', value: 'Ár: **150 000 000 Ft** | Férőhely: **50 db**', inline: false }
+                    { name: '📦 Alagsori Doboz', value: 'Ár: **500 000 Ft** | Férőhely: **4 db** | Hiba: **12%/óra** | Bónusz: **0%**', inline: false },
+                    { name: '🏠 Garázs Rig', value: 'Ár: **5 000 000 Ft** | Férőhely: **12 db** | Hiba: **8%/óra** | Bónusz: **+10%**', inline: false },
+                    { name: '🏢 Hivatalos Szerverterem', value: 'Ár: **35 000 000 Ft** | Férőhely: **25 db** | Hiba: **5%/óra** | Bónusz: **+25%**', inline: false },
+                    { name: '⚡ Ipari Adatközpont', value: 'Ár: **150 000 000 Ft** | Férőhely: **50 db** | Hiba: **3%/óra** | Bónusz: **+50%**', inline: false }
                 );
 
             const select = new StringSelectMenuBuilder()
@@ -1360,6 +1419,36 @@ client.on('interactionCreate', async (i) => {
             return i.update({ embeds: [embed], components: [row1, row2] });
         }
 
+        if (i.customId.startsWith('miner_menu_coolers')) {
+            const embed = new EmbedBuilder()
+                .setColor('#e74c3c')
+                .setTitle('🌀 HŰTŐRENDSZER BOLT')
+                .setDescription('Vásárolj hűtőberendezést a szervertermedhez a meghibásodási esély lecsökkentésére!')
+                .addFields(
+                    { name: '🌀 Dupla Ventilátoros Hűtés', value: 'Ár: **150 000 Ft** | Esély csökkentés: **-1%**', inline: false },
+                    { name: '🌊 Vízhűtéses AIO Rendszer', value: 'Ár: **1 500 000 Ft** | Esély csökkentés: **-2%**', inline: false },
+                    { name: '❄️ Ipari Klímarendszer', value: 'Ár: **10 000 000 Ft** | Esély csökkentés: **-3%**', inline: false },
+                    { name: '🧪 Kvantum Folyadékhűtés', value: 'Ár: **50 000 000 Ft** | Esély csökkentés: **-4%**', inline: false }
+                );
+
+            const select = new StringSelectMenuBuilder()
+                .setCustomId(`select_buy_cooler_${i.user.id}`)
+                .setPlaceholder('Válassz hűtőrendszert...')
+                .addOptions([
+                    { label: 'Dupla Ventilátor (150 000 Ft)', value: 'dual_fan' },
+                    { label: 'Vízhűtéses Rendszer (1 500 000 Ft)', value: 'water' },
+                    { label: 'Ipari Klímarendszer (10 000 000 Ft)', value: 'ac_unit' },
+                    { label: 'Kvantum Folyadékhűtés (50 000 000 Ft)', value: 'quantum_cooling' }
+                ]);
+
+            const row1 = new ActionRowBuilder().addComponents(select);
+            const row2 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
+            );
+
+            return i.update({ embeds: [embed], components: [row1, row2] });
+        }
+
         if (i.customId.startsWith('miner_back_main')) {
             const embed = new EmbedBuilder()
                 .setColor('#f7931a')
@@ -1367,21 +1456,26 @@ client.on('interactionCreate', async (i) => {
                 .setDescription('Válassz az alábbi lehetőségek közül gombok segítségével!')
                 .addFields(
                     { name: '🖥️ Videokártyák', value: 'Vásárolj bányászkártyákat a kapacitásod erejéig!', inline: true },
-                    { name: '🏢 Szerverterem', value: 'Bővítsd a helyiségedet több férőhelyért!', inline: true }
+                    { name: '🏢 Szerverterem', value: 'Bővítsd a helyiségedet több férőhelyért és bónuszokért!', inline: true },
+                    { name: '🌀 Hűtőrendszer', value: 'Vásárolj hűtést a túlmelegedés ellen!', inline: true }
                 );
 
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`miner_menu_gpus_${i.user.id}`).setLabel('🖥️ Videokártyák').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId(`miner_menu_rooms_${i.user.id}`).setLabel('🏢 Szerverterem Bővítés').setStyle(ButtonStyle.Success)
+                new ButtonBuilder().setCustomId(`miner_menu_rooms_${i.user.id}`).setLabel('🏢 Szerverterem Bővítés').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId(`miner_menu_coolers_${i.user.id}`).setLabel('🌀 Hűtőrendszer').setStyle(ButtonStyle.Danger)
             );
 
             return i.update({ embeds: [embed], components: [row] });
         }
 
         if (i.customId.startsWith('miner_claim_btn')) {
+            const roomInfo = ROOMS[userDb.roomType || 'alagsor'];
             const now = Date.now();
             const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
-            let btcPerHourTotal = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0) : 0;
+            
+            let rawBtc = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0) : 0;
+            let btcPerHourTotal = rawBtc * roomInfo.multiplier;
             const minedBtc = hoursPassed * btcPerHourTotal;
 
             if (minedBtc <= 0) return i.reply({ content: '❌ Nincs begyűjthető Bitcoin!', ephemeral: true });
@@ -1610,6 +1704,21 @@ client.on('interactionCreate', async (i) => {
             await userDb.save();
 
             return i.reply({ content: `🏢 Sikeresen megvásároltad a következőt: **${targetRoom.name}**! Új kapacitásod: **${targetRoom.maxGpus} db videokártya**.`, ephemeral: true });
+        }
+
+        if (i.customId.startsWith('select_buy_cooler')) {
+            const targetCoolerKey = i.values[0];
+            const targetCooler = COOLERS[targetCoolerKey];
+
+            if (userDb.balance < targetCooler.price) {
+                return i.reply({ content: `❌ Nincs elég pénzed erre a hűtőrendszerre! (Ára: ${formatFt(targetCooler.price)})`, ephemeral: true });
+            }
+
+            userDb.balance -= targetCooler.price;
+            userDb.coolerType = targetCoolerKey;
+            await userDb.save();
+
+            return i.reply({ content: `🌀 Sikeresen felszerelted a következőt: **${targetCooler.name}**! A szervertermed meghibásodási esélye jelentősen lecsökkent.`, ephemeral: true });
         }
 
         if (i.customId.startsWith('select_sell_gpu')) {
