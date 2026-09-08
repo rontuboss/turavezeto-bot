@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, PermissionFlagsBits, AttachmentBuilder } = require('discord.js');
 const ms = require('ms');
 
-// --- TICKET ÉS EMLÉKEZTETŐ BEÁLLÍTÁSOK ---
+// --- BEÁLLÍTÁSOK ---
 const CONFIG = {
     DEFAULT_PARENT: '1527688497593585746', 
     SORSOLAS_PARENTS: ['1534568444974862506', '1534631388211445891'],
@@ -14,11 +14,12 @@ const CONFIG = {
     REMINDER_ROLE: '1546794488372924476'
 };
 
-// --- ADATBÁZIS CSATLAKOZÁS ---
+// --- ADATBÁZIS & MODELLEK ---
 mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log('✅ Adatbázis csatlakoztatva!'))
     .catch(err => console.error('❌ DB hiba:', err));
 
+const User = mongoose.model('User', new mongoose.Schema({ guildId: String, userId: String, balance: { type: Number, default: 0 }, lastTreasure: { type: Number, default: 0 } }));
 const Invite = mongoose.model('Invite', new mongoose.Schema({ guildId: String, userId: String, invites: Number }));
 const Giveaway = mongoose.model('Giveaway', new mongoose.Schema({ messageId: String, channelId: String, guildId: String, endTime: Number, prize: String, winnerCount: Number, boosterBonus: Number, ended: { type: Boolean, default: false } }));
 
@@ -29,6 +30,13 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions, GatewayIntentBits.GuildMembers],
     partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
+
+// MEMÓRIA TÁROLÓ A MINES JÁTÉKOKNAK
+const activeMines = new Map();
+
+// --- SEGÉDFÜGGVÉNYEK ---
+const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' Ft';
+const getUserDb = async (guildId, userId) => await User.findOne({ guildId, userId }) || new User({ guildId, userId, balance: 0, lastTreasure: 0 });
 
 function drawWinners(participants, count) {
     const winners = [];
@@ -44,16 +52,15 @@ function drawWinners(participants, count) {
     return winners;
 }
 
-const updateStatus = (g) => g && client.user.setPresence({ activities: [{ name: `👥 ${g.memberCount} tag | /giveaway`, type: 4 }], status: 'online' });
+const updateStatus = (g) => g && client.user.setPresence({ activities: [{ name: `👥 ${g.memberCount} tag | /mines`, type: 4 }], status: 'online' });
 
-// AUTOMATA TICKET AUDIT ÉS SORREND DÍSZÍTÉS (1-50 -> Kat1, 51-100 -> Kat2)
+// --- TICKET AUDIT ÉS RENDEZÉS ---
 async function auditAndFixCategories(guild, categoryType) {
     if (categoryType === 'sima') {
         await auditAndFixCategories(guild, 'sorsolas');
         await auditAndFixCategories(guild, 'partner');
         return;
     }
-
     const parents = categoryType === 'sorsolas' ? CONFIG.SORSOLAS_PARENTS : CONFIG.PARTNER_PARENTS;
     const suffix = categoryType === 'sorsolas' ? 'nyeremeny' : 'partner';
 
@@ -91,40 +98,73 @@ async function auditAndFixCategories(guild, categoryType) {
 
 async function moveTicketCategory(channel, guild, type) {
     const userOverwrites = channel.permissionOverwrites.cache.filter(o => o.id !== guild.id && o.id !== client.user.id);
-
     if (type === 'sima') {
         let cleanUser = channel.name.replace(/^ticket-/, '').replace(/-(nyeremeny|partner)-\d+$/, '').split('-')[0] || 'user';
         await channel.setParent(CONFIG.DEFAULT_PARENT, { lockPermissions: false });
         await channel.setName(`ticket-${cleanUser}`);
-        for (const [id] of userOverwrites) {
-            await channel.permissionOverwrites.edit(id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true }).catch(() => {});
-        }
+        for (const [id] of userOverwrites) await channel.permissionOverwrites.edit(id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true }).catch(() => {});
         setTimeout(() => auditAndFixCategories(guild, 'sima'), 1000);
         return { categoryName: 'Alapértelmezett Ticket' };
     }
 
     const parents = type === 'sorsolas' ? CONFIG.SORSOLAS_PARENTS : CONFIG.PARTNER_PARENTS;
-    const catName = type === 'sorsolas' ? 'Nyereményjáték' : 'Partner';
-
     let targetCatId = parents[0];
     for (const pId of parents) {
         const cat = guild.channels.cache.get(pId);
-        if (cat && guild.channels.cache.filter(c => c.parentId === cat.id).size < 50) {
-            targetCatId = cat.id;
-            break;
-        }
+        if (cat && guild.channels.cache.filter(c => c.parentId === cat.id).size < 50) { targetCatId = cat.id; break; }
     }
 
     await channel.setParent(targetCatId, { lockPermissions: false });
-    for (const [id] of userOverwrites) {
-        await channel.permissionOverwrites.edit(id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true }).catch(() => {});
-    }
-
+    for (const [id] of userOverwrites) await channel.permissionOverwrites.edit(id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true }).catch(() => {});
     setTimeout(() => auditAndFixCategories(guild, type), 1000);
-    return { categoryName: catName };
+    return { categoryName: type === 'sorsolas' ? 'Nyereményjáték' : 'Partner' };
 }
 
-// NYEREMÉNYJÁTÉK LEZÁRÁSA RÉSZLETES LEÍRÁSSAL
+// --- MINES MEZŐ BIZTONSÁGOS SZORZÓ SZÁMÍTÁS ---
+function getMinesMultiplier(totalTiles, bombs, revealed) {
+    let mult = 0.96; 
+    for (let i = 0; i < revealed; i++) {
+        mult *= (totalTiles - i) / (totalTiles - bombs - i);
+    }
+    return Math.max(1.01, mult);
+}
+
+function buildMinesComponents(game, gameOver = false, won = false) {
+    const rows = [];
+    for (let r = 0; r < 4; r++) {
+        const row = new ActionRowBuilder();
+        for (let c = 0; c < 5; c++) {
+            const idx = r * 5 + c;
+            const btn = new ButtonBuilder().setCustomId(`mine_tile_${idx}`);
+            if (gameOver) {
+                btn.setDisabled(true);
+                if (game.grid[idx] === '💣') btn.setLabel('💣').setStyle(ButtonStyle.Danger);
+                else if (game.revealed.includes(idx)) btn.setLabel('💎').setStyle(ButtonStyle.Success);
+                else btn.setLabel('💎').setStyle(ButtonStyle.Secondary);
+            } else {
+                if (game.revealed.includes(idx)) {
+                    btn.setLabel('💎').setStyle(ButtonStyle.Success).setDisabled(true);
+                } else {
+                    btn.setLabel('❓').setStyle(ButtonStyle.Secondary);
+                }
+            }
+            row.addComponents(btn);
+        }
+        rows.push(row);
+    }
+
+    const controlRow = new ActionRowBuilder();
+    const currentMult = getMinesMultiplier(20, game.bombs, game.revealed.length);
+    const winAmount = Math.floor(game.bet * currentMult);
+
+    const cashoutBtn = new ButtonBuilder().setCustomId('mine_cashout').setLabel(`💰 KIFIZETÉS (${formatFt(winAmount)})`).setStyle(ButtonStyle.Success).setDisabled(game.revealed.length === 0 || gameOver);
+    controlRow.addComponents(cashoutBtn);
+    rows.push(controlRow);
+
+    return rows;
+}
+
+// --- GIVEAWAY LEZÁRÁS ---
 async function endGiveaway(gwData) {
     try {
         const checkDb = await Giveaway.findOne({ messageId: gwData.messageId });
@@ -158,14 +198,11 @@ async function endGiveaway(gwData) {
             const mentions = winners.map(id => `<@${id}>`).join(' ');
 
             let embedVal = mentions.length > 1000 ? `🎉 **${winners.length} nyertes kisorsolva!**` : mentions;
-            const endEmbed = EmbedBuilder.from(message.embeds[0]).setDescription('A nyereményjáték lezárult!').addFields({ name: 'Nyertes(ek)', value: embedVal });
-            await message.edit({ embeds: [endEmbed] });
+            await message.edit({ embeds: [EmbedBuilder.from(message.embeds[0]).setDescription('A nyereményjáték lezárult!').addFields({ name: 'Nyertes(ek)', value: embedVal })] });
 
             const header = `🎉 **Gratulálok a nyerteseknek!** 🎉\n🎁 **Nyeremény:** ${gwData.prize}\n👑 **Nyertes(ek):**\n`;
-
-            if ((header + mentions).length <= 2000) {
-                await channel.send(`${header}${mentions}`);
-            } else {
+            if ((header + mentions).length <= 2000) await channel.send(`${header}${mentions}`);
+            else {
                 await channel.send(header);
                 let msg = "";
                 for (const wId of winners) {
@@ -180,28 +217,26 @@ async function endGiveaway(gwData) {
     } catch (e) { console.error(e); }
 }
 
-// AUTOMATA EMLÉKEZTETŐ IDŐZÍTŐ (15:58, 15:59, 16:00, 19:58, 19:59, 20:00)
+// --- EMLÉKEZTETŐ (15:58, 15:59, 16:00, 19:58, 19:59, 20:00) ---
 let lastTriggeredMinute = '';
 setInterval(async () => {
     const timeStr = new Date().toLocaleTimeString('hu-HU', { timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false });
-    const targetTimes = ['15:58', '15:59', '16:00', '19:58', '19:59', '20:00'];
-    
-    if (targetTimes.includes(timeStr) && lastTriggeredMinute !== timeStr) {
+    if (['15:58', '15:59', '16:00', '19:58', '19:59', '20:00'].includes(timeStr) && lastTriggeredMinute !== timeStr) {
         lastTriggeredMinute = timeStr;
         const channel = client.channels.cache.get(CONFIG.REMINDER_CHANNEL);
         if (channel) {
             const alertEmoji = channel.guild?.emojis.cache.find(e => e.name.toLowerCase() === 'alert') || '🚨';
             const eventTime = ['15:58', '15:59', '16:00'].includes(timeStr) ? '16:00' : '20:00';
-            const count = Math.floor(Math.random() * 4) + 5; // 5-8 ping
-            
+            const count = Math.floor(Math.random() * 4) + 5;
             for (let i = 0; i < count; i++) {
                 await channel.send({ content: `${alertEmoji} 🚨 **RIASZTÁS! MEGY A VÁNDORKERESKEDŐ! (${eventTime})** 🚨 ${alertEmoji}\n<@&${CONFIG.REMINDER_ROLE}>` }).catch(() => {});
-                await new Promise(resolve => setTimeout(resolve, 1500));
+                await new Promise(r => setTimeout(r, 1500));
             }
         }
     }
 }, 10000);
 
+// --- SLASH PARANCSOK REGISZTRÁCIÓJA ---
 const commands = [
     new SlashCommandBuilder().setName('giveaway').setDescription('Nyereményjáték parancsok')
         .addSubcommand(s => s.setName('start').setDescription('Indítás').addStringOption(o => o.setName('duration').setDescription('Időtartam').setRequired(true)).addStringOption(o => o.setName('prize').setDescription('Nyeremény').setRequired(true)).addIntegerOption(o => o.setName('winners').setDescription('Nyertesek').setRequired(true).setMinValue(1)).addIntegerOption(o => o.setName('booster_bonus').setDescription('Booster bónusz %')))
@@ -214,15 +249,22 @@ const commands = [
         .addSubcommand(s => s.setName('sima').setDescription('Vissza az alapértelmezett kategóriába')),
     new SlashCommandBuilder().setName('invites').setDescription('Meghívók lekérése').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
     
-    // TROLL SLASH PARANCSOK (STEALTH MÓD)
-    new SlashCommandBuilder().setName('fakeban').setDescription('Troll kamu kitiltás').addUserOption(o => o.setName('user').setDescription('Kit tiltsunk ki kísérletképpen?').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('Indok')),
+    // GAZDASÁGI & MINES PARANCSOK
+    new SlashCommandBuilder().setName('treasure').setDescription('Ingyen Forint kikérése (10 percenként)'),
+    new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Kinek az egyenlege?')),
+    new SlashCommandBuilder().setName('utalas').setDescription('Pénz küldése másnak').addUserOption(o => o.setName('user').setDescription('Kinek?').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('Összeg (Ft)').setRequired(true).setMinValue(1)),
+    new SlashCommandBuilder().setName('top').setDescription('A szerver leggazdagabb tagjai'),
+    new SlashCommandBuilder().setName('mines').setDescription('Aknakereső kaszinó minijáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)).addIntegerOption(o => o.setName('bombs').setDescription('Bombák száma (1-19)').setRequired(true).setMinValue(1).setMaxValue(19)),
+
+    // TROLL PARANCSOK (STEALTH MÓD)
+    new SlashCommandBuilder().setName('fakeban').setDescription('Troll kamu kitiltás').addUserOption(o => o.setName('user').setDescription('Felhasználó').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('Indok')),
     new SlashCommandBuilder().setName('nitro').setDescription('Ingyen Discord Nitro ajándék (kamu)'),
-    new SlashCommandBuilder().setName('mock').setDescription('Spongyabob gúnyolódó szöveg').addStringOption(o => o.setName('text').setDescription('A gúnyolandó szöveg').setRequired(true)),
+    new SlashCommandBuilder().setName('mock').setDescription('Spongyabob gúnyolódó szöveg').addStringOption(o => o.setName('text').setDescription('A szöveg').setRequired(true)),
     new SlashCommandBuilder().setName('roulette').setDescription('Orosz rulett játék (1/6 esély 1 perces némításra)'),
     new SlashCommandBuilder().setName('iq').setDescription('IQ teszt mérés').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
-    new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').addUserOption(o => o.setName('user').setDescription('Kinek szóljon az oltás?').setRequired(true)),
-    new SlashCommandBuilder().setName('meret').setDescription('Faszméret mérés').addUserOption(o => o.setName('user').setDescription('Kinek a méretét mérjük meg?')),
-    new SlashCommandBuilder().setName('rate').setDescription('Értékelj bármit 1-től 10-ig').addStringOption(o => o.setName('thing').setDescription('Mit értékeljen a bot?').setRequired(true))
+    new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').addUserOption(o => o.setName('user').setDescription('Kinek szóljon?').setRequired(true)),
+    new SlashCommandBuilder().setName('meret').setDescription('Faszméret mérés').addUserOption(o => o.setName('user').setDescription('Kinek a mérete?')),
+    new SlashCommandBuilder().setName('rate').setDescription('Értékelj bármit').addStringOption(o => o.setName('thing').setDescription('Mit értékeljen?').setRequired(true))
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
@@ -252,23 +294,15 @@ client.on('guildMemberAdd', async (m) => {
 });
 client.on('guildMemberRemove', (m) => updateStatus(m.guild));
 
-// PREFIX PARANCSOK, VÉLETLENSZERŰ REAKCIÓK ÉS AUTOMATA MÉM VÁLASZOK
+// PREFIX PARANCSOK ÉS AUTO MÉM REAKCIÓK
 client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.guild) return;
     const cmd = m.content.toLowerCase().trim();
 
-    // 1.5% esély véletlenszerű troll reakcióra (🤡 vagy 🤓)
-    if (Math.random() < 0.015) {
-        const randEmoji = Math.random() < 0.5 ? '🤡' : '🤓';
-        m.react(randEmoji).catch(() => {});
-    }
+    if (Math.random() < 0.015) m.react(Math.random() < 0.5 ? '🤡' : '🤓').catch(() => {});
 
-    // AUTOMATA MÉM SZÓFIGYELŐ
-    if (cmd === 'mikor') {
-        return m.reply('Majd ha piros hó esik! 🤡').catch(() => {});
-    } else if (cmd === 'miért' || cmd === 'miert') {
-        return m.reply('Mert csak! 🤫').catch(() => {});
-    }
+    if (cmd === 'mikor') return m.reply('Majd ha piros hó esik! 🤡').catch(() => {});
+    if (cmd === 'miért' || cmd === 'miert') return m.reply('Mert csak! 🤫').catch(() => {});
 
     if (['.sorsolas', '.partner', '.sima'].includes(cmd)) {
         await m.delete().catch(() => {});
@@ -276,10 +310,8 @@ client.on('messageCreate', async (m) => {
             const r = await m.channel.send('❌ Nincs jogosultságod!');
             return setTimeout(() => r.delete().catch(() => {}), 3000);
         }
-
-        const type = cmd === '.sorsolas' ? 'sorsolas' : (cmd === '.partner' ? 'partner' : 'sima');
         try {
-            const res = await moveTicketCategory(m.channel, m.guild, type);
+            const res = await moveTicketCategory(m.channel, m.guild, cmd.replace('.', ''));
             const r = await m.channel.send(`✅ Ticket áthelyezve ide: **${res.categoryName}**!`);
             setTimeout(() => r.delete().catch(() => {}), 4000);
         } catch (err) {
@@ -289,13 +321,98 @@ client.on('messageCreate', async (m) => {
     }
 });
 
-// INTERAKCIÓK (SLASH COMMANDS & BUTTONS)
+// INTERAKCIÓK
 client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton()) return;
 
     if (i.isChatInputCommand()) {
+        const userDb = await getUserDb(i.guild.id, i.user.id);
 
-        // LOPAKODÓ MÓD (STEALTH): Eltünteti a szürke "X használta ezt: /command" fejlécet!
+        // --- TREASURE ---
+        if (i.commandName === 'treasure') {
+            const now = Date.now();
+            const cd = 10 * 60 * 1000; // 10 perc
+            if (now - userDb.lastTreasure < cd) {
+                const remaining = Math.ceil((cd - (now - userDb.lastTreasure)) / 1000 / 60);
+                return i.reply({ content: `⏳ Még várnod kell **${remaining} percet** a következő kincsig!`, ephemeral: true });
+            }
+
+            const isSuperChest = Math.random() < 0.01; // 1% esély
+            const amount = isSuperChest ? 100000 : Math.floor(Math.random() * 29001) + 1000; // 100k vagy 1k-30k
+
+            userDb.balance += amount;
+            userDb.lastTreasure = now;
+            await userDb.save();
+
+            if (isSuperChest) {
+                return i.reply({ content: `✨ **SZUPER LÁDA!** ✨ Ritka kincset találtál: **${formatFt(amount)}** íródott jóvá az egyenlegeden! 🎉` });
+            } else {
+                return i.reply({ content: `🪙 Kinyitottad a ládát és találtál benne: **${formatFt(amount)}**-ot!` });
+            }
+        }
+
+        // --- BAL / EGYENLEG ---
+        if (i.commandName === 'bal') {
+            const target = i.options.getUser('user') || i.user;
+            const targetDb = await getUserDb(i.guild.id, target.id);
+            return i.reply({ content: `💳 **${target.username}** egyenlege: **${formatFt(targetDb.balance)}**` });
+        }
+
+        // --- UTALÁS ---
+        if (i.commandName === 'utalas') {
+            const target = i.options.getUser('user');
+            const amount = i.options.getInteger('amount');
+            if (target.id === i.user.id) return i.reply({ content: '❌ Magadnak nem utalhatsz!', ephemeral: true });
+            if (userDb.balance < amount) return i.reply({ content: '❌ Nincs ennyi pénzed!', ephemeral: true });
+
+            const targetDb = await getUserDb(i.guild.id, target.id);
+            userDb.balance -= amount;
+            targetDb.balance += amount;
+            await userDb.save();
+            await targetDb.save();
+
+            return i.reply({ content: `💸 Sikeresen átutaltál **${formatFt(amount)}**-ot <@${target.id}> felhasználónak!` });
+        }
+
+        // --- TOPLISTA ---
+        if (i.commandName === 'top') {
+            const topUsers = await User.find({ guildId: i.guild.id }).sort({ balance: -1 }).limit(10);
+            let desc = "";
+            topUsers.forEach((u, index) => desc += `**${index + 1}.** <@${u.userId}> — **${formatFt(u.balance)}**\n`);
+            const embed = new EmbedBuilder().setColor('#ffd700').setTitle('🏆 A Szerver Leggazdagabb Tagjai').setDescription(desc || 'Még senkinek sincs pénze.');
+            return i.reply({ embeds: [embed] });
+        }
+
+        // --- MINES INDÍTÁS ---
+        if (i.commandName === 'mines') {
+            const bet = i.options.getInteger('bet');
+            const bombs = i.options.getInteger('bombs');
+
+            if (userDb.balance < bet) return i.reply({ content: '❌ Nincs elég egyenleged a játék elindításához!', ephemeral: true });
+
+            userDb.balance -= bet;
+            await userDb.save();
+
+            // Rács generálás (20 mező)
+            const grid = Array(20).fill('💎');
+            let placed = 0;
+            while (placed < bombs) {
+                const rand = Math.floor(Math.random() * 20);
+                if (grid[rand] !== '💣') { grid[rand] = '💣'; placed++; }
+            }
+
+            const game = { userId: i.user.id, bet, bombs, grid, revealed: [] };
+
+            const embed = new EmbedBuilder().setColor('#00f2fe').setTitle('💣 AKNAKERESŐ (MINES)').setDescription(`**Tét:** ${formatFt(bet)}\n**Bombák:** ${bombs} / 20\n**Szorzó:** x1.00\n**Várható nyeremény:** ${formatFt(bet)}`);
+            const rows = buildMinesComponents(game);
+
+            const msg = await i.reply({ embeds: [embed], components: rows, fetchReply: true });
+            game.msgId = msg.id;
+            activeMines.set(msg.id, game);
+            return;
+        }
+
+        // STEALTH TROLL PARANCSOK
         if (['fakeban', 'nitro', 'mock', 'roulette', 'iq', 'roast', 'meret', 'rate'].includes(i.commandName)) {
             await i.deferReply({ ephemeral: true });
 
@@ -305,30 +422,21 @@ client.on('interactionCreate', async (i) => {
                 const banEmbed = new EmbedBuilder().setColor('#ff0000').setTitle('🔨 Tag Kitiltva!').setDescription(`**Felhasználó:** <@${user.id}>\n**Indok:** ${reason}\n**Moderátor:** Adminisztráció`);
                 const msg = await i.channel.send({ embeds: [banEmbed] });
                 await i.deleteReply().catch(() => {});
-
-                setTimeout(async () => {
-                    const jokeEmbed = new EmbedBuilder().setColor('#ffaa00').setTitle('🤡 CSAK VICCELTEM!').setDescription(`**<@${user.id}>** nem lett kitiltva, maradhatsz! 🎉`);
-                    await msg.edit({ embeds: [jokeEmbed] }).catch(() => {});
-                }, 3000);
+                setTimeout(() => msg.edit({ embeds: [new EmbedBuilder().setColor('#ffaa00').setTitle('🤡 CSAK VICCELTEM!').setDescription(`**<@${user.id}>** nem lett kitiltva, maradhatsz! 🎉`)] }).catch(() => {}), 3000);
             }
-
             else if (i.commandName === 'nitro') {
                 const embed = new EmbedBuilder().setColor('#5865F2').setTitle('🎁 Discord Nitro Gift!').setDescription('Nyertél 1 hónap Discord Nitro-t! Kattints az alábbi gombra az átvételhez!').setThumbnail('https://i.imgur.com/264293f.png');
                 const btn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_fake_nitro').setLabel('🎁 Claim Nitro').setStyle(ButtonStyle.Success));
                 await i.channel.send({ embeds: [embed], components: [btn] });
                 await i.deleteReply().catch(() => {});
             }
-
             else if (i.commandName === 'mock') {
-                const text = i.options.getString('text');
-                const mocked = text.split('').map((char, idx) => idx % 2 === 0 ? char.toLowerCase() : char.toUpperCase()).join('');
+                const mocked = i.options.getString('text').split('').map((c, idx) => idx % 2 === 0 ? c.toLowerCase() : c.toUpperCase()).join('');
                 await i.channel.send({ content: `${mocked} 🤡` });
                 await i.deleteReply().catch(() => {});
             }
-
             else if (i.commandName === 'roulette') {
-                const isShot = Math.floor(Math.random() * 6) === 0; // 1/6 esély
-                if (isShot) {
+                if (Math.floor(Math.random() * 6) === 0) {
                     await i.member.timeout(60 * 1000, 'Orosz rulett vesztes').catch(() => {});
                     await i.channel.send({ content: `💥 **BANG!** <@${i.user.id}> meghúzta a ravaszt, a fegyver eldördült! (1 perc némítás) 🪦` });
                 } else {
@@ -336,61 +444,30 @@ client.on('interactionCreate', async (i) => {
                 }
                 await i.deleteReply().catch(() => {});
             }
-
             else if (i.commandName === 'iq') {
                 const target = i.options.getUser('user') || i.user;
-                const iqVal = Math.floor(Math.random() * 251) - 50; // -50 től 200 ig
-                let comment = "Átlagos elme.";
-                if (iqVal < 0) comment = "Néha elfelejt levegőt venni. 🧠❌";
-                else if (iqVal < 50) comment = "A gombalevest is villával eszi. 🥣";
-                else if (iqVal < 100) comment = "Nem a legélesebb kés a fiókban, de igyekszik. 🗡️";
-                else if (iqVal < 140) comment = "Kifejezetten okos koponya! 💡";
-                else comment = "Albert Einstein titkos leszármazottja! ⚛️";
-
+                const iqVal = Math.floor(Math.random() * 251) - 50;
+                let comment = iqVal < 0 ? "Néha elfelejt levegőt venni. 🧠❌" : (iqVal < 50 ? "A gombalevest is villával eszi. 🥣" : (iqVal < 100 ? "Nem a legélesebb kés a fiókban. 🗡️" : "Smart koponya! 💡"));
                 await i.channel.send({ content: `🧠 **<@${target.id}>** IQ teszt eredménye: **${iqVal} IQ**\n*Értékelés:* ${comment}` });
                 await i.deleteReply().catch(() => {});
             }
-
             else if (i.commandName === 'roast') {
                 const target = i.options.getUser('user');
-                const roasts = [
-                    "Mikor Isten az észt osztotta, te valószínűleg a sor végén álltál egy törött csészével. ☕",
-                    "Nem mondom, hogy lassan gondolkodsz, de az agyad még dial-up interneten fut. 🌐",
-                    "Olyan vagy, mint a felhős idő: ha eltűnsz, mindenkinek szebb lesz a napja. ☀️",
-                    "Ha az ostobaság fájna, egész nap üvöltenél. 🔊",
-                    "Az egyetlen dolog, ami gyorsabb nálad, az a lefelé ívelő karriered. 📉"
-                ];
-                const randomRoast = roasts[Math.floor(Math.random() * roasts.length)];
-                await i.channel.send({ content: `🔥 **<@${target.id}>**: ${randomRoast}` });
+                const roasts = ["Mikor Isten az észt osztotta, te valószínűleg a sor végén álltál egy törött csészével. ☕", "Olyan vagy, mint a felhős idő: ha eltűnsz, mindenkinek szebb lesz a napja. ☀️", "Ha az ostobaság fájna, egész nap üvöltenél. 🔊"];
+                await i.channel.send({ content: `🔥 **<@${target.id}>**: ${roasts[Math.floor(Math.random() * roasts.length)]}` });
                 await i.deleteReply().catch(() => {});
             }
-
             else if (i.commandName === 'meret') {
                 const target = i.options.getUser('user') || i.user;
-                const sizeNum = Math.floor(Math.random() * 30) + 1; // 1 - 30 cm
-                const equals = '='.repeat(sizeNum);
-                await i.channel.send({ content: `🍆 **<@${target.id}>** fasz mérete: **8${equals}D** (${sizeNum} cm)` });
+                const sizeNum = Math.floor(Math.random() * 30) + 1;
+                await i.channel.send({ content: `🍆 **<@${target.id}>** fasz mérete: **8${'='.repeat(sizeNum)}D** (${sizeNum} cm)` });
                 await i.deleteReply().catch(() => {});
             }
-
             else if (i.commandName === 'rate') {
-                const thing = i.options.getString('thing');
                 const rating = Math.floor(Math.random() * 10) + 1;
-                const comments = [
-                    "Katasztrofális, jobb ha nem is beszélünk róla. 🤮",
-                    "Gagyi, mint a piaci napszemüveg. 🕶️",
-                    "Elmegy egy gyenge keddi napon. 😐",
-                    "Középszerű, semmi extra. 🤷‍♂️",
-                    "Teljesen rendben van! 👍",
-                    "Kifejezetten tetszetős! 👌",
-                    "Zseniális darab! 🔥",
-                    "Abszolút mestermű, 10/10! 🏆"
-                ];
-                const comment = comments[Math.min(Math.floor((rating - 1) / 10 * comments.length), comments.length - 1)];
-                await i.channel.send({ content: `⭐ Értékelés: **"${thing}"**\n📊 Eredmény: **${rating}/10** - *${comment}*` });
+                await i.channel.send({ content: `⭐ Értékelés: **"${i.options.getString('thing')}"**\n📊 Eredmény: **${rating}/10**` });
                 await i.deleteReply().catch(() => {});
             }
-
             return;
         }
 
@@ -401,7 +478,7 @@ client.on('interactionCreate', async (i) => {
             return i.reply({ content: `📩 **${user.username}** eddig **${data ? data.invites : 0}** embert hívott meg!`, ephemeral: false });
         }
 
-        // TICKET PARANCSOK
+        // TICKET
         if (i.commandName === 'ticket') {
             const sub = i.options.getSubcommand();
             if (sub === 'setup') {
@@ -451,7 +528,7 @@ client.on('interactionCreate', async (i) => {
                 const count = i.options.getInteger('winners') || 1;
                 await i.deferReply({ ephemeral: true });
                 const gwData = await Giveaway.findOne({ messageId: msgId });
-                if (!gwData) return i.editReply({ content: '❌ Nyereményjáték nem található!' });
+                if (!gwData) return i.editReply({ content: '❌ Nem található!' });
 
                 const ch = i.guild.channels.cache.get(gwData.channelId);
                 const msg = await ch?.messages.fetch(gwData.messageId).catch(() => null);
@@ -490,12 +567,56 @@ client.on('interactionCreate', async (i) => {
         }
     }
 
+    // GOMB INTERAKCIÓK
     if (i.isButton()) {
-        // TROLL NITRO GOMB KLIKK
+        // --- MINES GOMB KEZELÉS ---
+        if (i.customId.startsWith('mine_')) {
+            const game = activeMines.get(i.message.id);
+            if (!game) return i.reply({ content: '❌ Ez a játék már véget ért!', ephemeral: true });
+            if (i.user.id !== game.userId) return i.reply({ content: '❌ Ez nem a te játékod! 🤡', ephemeral: true });
+
+            if (i.customId === 'mine_cashout') {
+                const currentMult = getMinesMultiplier(20, game.bombs, game.revealed.length);
+                const winAmount = Math.floor(game.bet * currentMult);
+
+                const uDb = await getUserDb(i.guild.id, i.user.id);
+                uDb.balance += winAmount;
+                await uDb.save();
+
+                activeMines.delete(i.message.id);
+
+                const endEmbed = new EmbedBuilder().setColor('#00ff00').setTitle('💰 KIFIZETÉS SIKERES!').setDescription(`Kiszálltál a játékból!\n\n**Megnyert összeg:** ${formatFt(winAmount)} (x${currentMult.toFixed(2)})`);
+                return i.update({ embeds: [endEmbed], components: buildMinesComponents(game, true, true) });
+            }
+
+            if (i.customId.startsWith('mine_tile_')) {
+                const idx = parseInt(i.customId.split('_')[2]);
+                if (game.revealed.includes(idx)) return i.deferUpdate();
+
+                // BOMBA TALÁLAT
+                if (game.grid[idx] === '💣') {
+                    activeMines.delete(i.message.id);
+                    const loseEmbed = new EmbedBuilder().setColor('#ff0000').setTitle('💥 BUMM! AKNÁRA LÉPTÉL!').setDescription(`Sajnos megléptél egy bombát, a téted (**${formatFt(game.bet)}**) elveszett!`);
+                    return i.update({ embeds: [loseEmbed], components: buildMinesComponents(game, true, false) });
+                }
+
+                // GYÉMÁNT TALÁLAT
+                game.revealed.push(idx);
+                const currentMult = getMinesMultiplier(20, game.bombs, game.revealed.length);
+                const currentWin = Math.floor(game.bet * currentMult);
+
+                const updateEmbed = new EmbedBuilder().setColor('#00f2fe').setTitle('💎 TALÁLAT!').setDescription(`**Tét:** ${formatFt(game.bet)}\n**Megtalált gyémántok:** ${game.revealed.length} / ${20 - game.bombs}\n**Jelenlegi szorzó:** x${currentMult.toFixed(2)}\n**Várható nyeremény:** ${formatFt(currentWin)}`);
+
+                return i.update({ embeds: [updateEmbed], components: buildMinesComponents(game, false, false) });
+            }
+        }
+
+        // TROLL NITRO GOMB
         if (i.customId === 'claim_fake_nitro') {
             return i.reply({ content: `🎉 **<@${i.user.id}>** bedőlt a kamu Nitrónak és át lett verve! 🤡`, ephemeral: false });
         }
 
+        // TICKET NYITÁS ÉS LEZÁRÁS
         if (i.customId === 'open_ticket') {
             const name = `ticket-${i.user.username}`;
             if (i.guild.channels.cache.find(c => c.name === name.toLowerCase())) return i.reply({ content: `❌ Már van nyitott ticketed!`, ephemeral: true });
