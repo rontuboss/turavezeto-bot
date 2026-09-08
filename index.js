@@ -80,7 +80,7 @@ const commandCooldowns = new Map();
 // 3. HARDVER, SZOBA ÉS HŰTŐ ADATOK
 // ==========================================
 const ROOMS = {
-    alagsor: { name: '📦 Alagsori Doboz', price: 500000, maxGpus: 4, failChance: 0.12, multiplier: 1.0 },
+    alagsor: { name: '📦 Alagsori Doboz', price: 0, maxGpus: 4, failChance: 0.12, multiplier: 1.0 },
     garazs: { name: '🏠 Garázs Rig', price: 5000000, maxGpus: 12, failChance: 0.08, multiplier: 1.10 },
     szerver: { name: '🏢 Hivatalos Szerverterem', price: 35000000, maxGpus: 25, failChance: 0.05, multiplier: 1.25 },
     adatkozpont: { name: '⚡ Ipari Adatközpont', price: 150000000, maxGpus: 50, failChance: 0.03, multiplier: 1.50 }
@@ -803,7 +803,7 @@ client.on('interactionCreate', async (i) => {
                 let btcPerHourTotal = 0;
                 if (userDb.rigs && !userDb.isBroken) {
                     const rawBtc = userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0);
-                    btcPerHourTotal = rawBtc * roomInfo.multiplier; // Szerverterem bónusz szorzó!
+                    btcPerHourTotal = rawBtc * roomInfo.multiplier;
                 }
                 const minedBtc = hoursPassed * btcPerHourTotal;
 
@@ -1006,9 +1006,6 @@ client.on('interactionCreate', async (i) => {
             return i.reply({ content: jobs[Math.floor(Math.random() * jobs.length)] });
         }
 
-        // ==========================================
-        // 🗝️ /TREASURE (CSÖKKENTETT JUTALOM A BALANCE MIATT)
-        // ==========================================
         if (i.commandName === 'treasure') {
             const now = Date.now();
             const isBooster = i.member?.roles?.cache?.has(CONFIG.BOOSTER_ROLE);
@@ -1020,8 +1017,8 @@ client.on('interactionCreate', async (i) => {
             }
 
             const isSuperChest = Math.random() < 0.05;
-            const baseMin = 10000; // 25,000 helyett 10,000 Ft
-            const baseMax = 25000; // 60,000 helyett 25,000 Ft
+            const baseMin = 10000;
+            const baseMax = 25000;
             const randomBase = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
             
             const amount = isSuperChest ? 100000 : randomBase;
@@ -1393,9 +1390,8 @@ client.on('interactionCreate', async (i) => {
             const embed = new EmbedBuilder()
                 .setColor('#00f2fe')
                 .setTitle('🏢 SZERVERTEREM BŐVÍTÉS')
-                .setDescription('Vásárolj nagyobb helyiséget több helyért, kevesebb meghibásodásért és extra bónuszért!')
+                .setDescription('Vásárolj nagyobb helyiséget több helyért, kevesebb meghibásodásért és extra bónuszért!\n*(Megjegyzés: Az Alagsori Doboz az alapértelmezett ingyenes kezdő szobád.)*')
                 .addFields(
-                    { name: '📦 Alagsori Doboz', value: 'Ár: **500 000 Ft** | Férőhely: **4 db** | Hiba: **12%/óra** | Bónusz: **0%**', inline: false },
                     { name: '🏠 Garázs Rig', value: 'Ár: **5 000 000 Ft** | Férőhely: **12 db** | Hiba: **8%/óra** | Bónusz: **+10%**', inline: false },
                     { name: '🏢 Hivatalos Szerverterem', value: 'Ár: **35 000 000 Ft** | Férőhely: **25 db** | Hiba: **5%/óra** | Bónusz: **+25%**', inline: false },
                     { name: '⚡ Ipari Adatközpont', value: 'Ár: **150 000 000 Ft** | Férőhely: **50 db** | Hiba: **3%/óra** | Bónusz: **+50%**', inline: false }
@@ -1405,7 +1401,6 @@ client.on('interactionCreate', async (i) => {
                 .setCustomId(`select_buy_room_${i.user.id}`)
                 .setPlaceholder('Válassz szobát a megvásárláshoz...')
                 .addOptions([
-                    { label: 'Alagsori Doboz (500 000 Ft)', value: 'alagsor' },
                     { label: 'Garázs Rig (5 000 000 Ft)', value: 'garazs' },
                     { label: 'Hivatalos Szerverterem (35 000 000 Ft)', value: 'szerver' },
                     { label: 'Ipari Adatközpont (150 000 000 Ft)', value: 'adatkozpont' }
@@ -1423,22 +1418,23 @@ client.on('interactionCreate', async (i) => {
             const embed = new EmbedBuilder()
                 .setColor('#e74c3c')
                 .setTitle('🌀 HŰTŐRENDSZER BOLT')
-                .setDescription('Vásárolj hűtőberendezést a szervertermedhez a meghibásodási esély lecsökkentésére!')
+                .setDescription('Vásárolj jobb hűtést a szervertermedhez a meghibásodási esély lecsökkentésére!\n\n**Hűtőrendszerek hatása a túlmelegedésre:**')
                 .addFields(
-                    { name: '🌀 Dupla Ventilátoros Hűtés', value: 'Ár: **150 000 Ft** | Esély csökkentés: **-1%**', inline: false },
-                    { name: '🌊 Vízhűtéses AIO Rendszer', value: 'Ár: **1 500 000 Ft** | Esély csökkentés: **-2%**', inline: false },
-                    { name: '❄️ Ipari Klímarendszer', value: 'Ár: **10 000 000 Ft** | Esély csökkentés: **-3%**', inline: false },
-                    { name: '🧪 Kvantum Folyadékhűtés', value: 'Ár: **50 000 000 Ft** | Esély csökkentés: **-4%**', inline: false }
+                    { name: '❄️ Gyári Léghűtés (Alapértelmezett)', value: 'Ár: **Ingyenes** | Esély csökkentés: **0%**', inline: false },
+                    { name: '🌀 Dupla Ventilátoros Hűtés', value: 'Ár: **150 000 Ft** | Esély csökkentés: **-1.0% / óra**', inline: false },
+                    { name: '🌊 Vízhűtéses AIO Rendszer', value: 'Ár: **1 500 000 Ft** | Esély csökkentés: **-2.0% / óra**', inline: false },
+                    { name: '❄️ Ipari Klímarendszer', value: 'Ár: **10 000 000 Ft** | Esély csökkentés: **-3.0% / óra**', inline: false },
+                    { name: '🧪 Kvantum Folyadékhűtés', value: 'Ár: **50 000 000 Ft** | Esély csökkentés: **-4.0% / óra**', inline: false }
                 );
 
             const select = new StringSelectMenuBuilder()
                 .setCustomId(`select_buy_cooler_${i.user.id}`)
                 .setPlaceholder('Válassz hűtőrendszert...')
                 .addOptions([
-                    { label: 'Dupla Ventilátor (150 000 Ft)', value: 'dual_fan' },
-                    { label: 'Vízhűtéses Rendszer (1 500 000 Ft)', value: 'water' },
-                    { label: 'Ipari Klímarendszer (10 000 000 Ft)', value: 'ac_unit' },
-                    { label: 'Kvantum Folyadékhűtés (50 000 000 Ft)', value: 'quantum_cooling' }
+                    { label: 'Dupla Ventilátor (-1.0% hiba esély)', value: 'dual_fan', description: 'Ár: 150 000 Ft' },
+                    { label: 'Vízhűtéses AIO Rendszer (-2.0% hiba esély)', value: 'water', description: 'Ár: 1 500 000 Ft' },
+                    { label: 'Ipari Klímarendszer (-3.0% hiba esély)', value: 'ac_unit', description: 'Ár: 10 000 000 Ft' },
+                    { label: 'Kvantum Folyadékhűtés (-4.0% hiba esély)', value: 'quantum_cooling', description: 'Ár: 50 000 000 Ft' }
                 ]);
 
             const row1 = new ActionRowBuilder().addComponents(select);
