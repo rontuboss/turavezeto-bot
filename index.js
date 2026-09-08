@@ -17,7 +17,8 @@ const CONFIG = {
     REMINDER_ROLE: '1546794488372924476',
     BOOSTER_ROLE: '1449473778386997311',
     STAFF_ROLE: '1436671411178569832',
-    MEMBER_ROLE: '1486847637134246139'
+    MEMBER_ROLE: '1486847637134246139',
+    CASINO_VAULT_USER: '1273195305013084200' // A játékosok által elbukott pénz ide kerül
 };
 
 // ==========================================
@@ -55,6 +56,17 @@ const commandCooldowns = new Map();
 // ==========================================
 const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' Ft';
 const getUserDb = async (guildId, userId) => await User.findOne({ guildId, userId }) || new User({ guildId, userId, balance: 0, lastTreasure: 0, lastDaily: 0, lastWork: 0 });
+
+async function addLossToVault(guildId, amount) {
+    if (amount <= 0) return;
+    try {
+        const vaultDb = await getUserDb(guildId, CONFIG.CASINO_VAULT_USER);
+        vaultDb.balance += amount;
+        await vaultDb.save();
+    } catch (e) {
+        console.error('❌ Hiba a kaszinó számla frissítésekor:', e);
+    }
+}
 
 function drawWinners(participants, count) {
     const winners = [];
@@ -141,7 +153,7 @@ async function moveTicketCategory(channel, guild, type) {
 }
 
 // ==========================================
-// 5. MINIGAME LOGIC (MINES & BLACKJACK)
+// 5. MINIGAME LOGIC (MINES 5x5 & BLACKJACK)
 // ==========================================
 function getMinesMultiplier(totalTiles, bombs, revealed) {
     let mult = 0.96; 
@@ -153,7 +165,7 @@ function getMinesMultiplier(totalTiles, bombs, revealed) {
 
 function buildMinesComponents(game, gameOver = false, won = false) {
     const rows = [];
-    for (let r = 0; r < 4; r++) {
+    for (let r = 0; r < 5; r++) {
         const row = new ActionRowBuilder();
         for (let c = 0; c < 5; c++) {
             const idx = r * 5 + c;
@@ -176,7 +188,7 @@ function buildMinesComponents(game, gameOver = false, won = false) {
     }
 
     const controlRow = new ActionRowBuilder();
-    const currentMult = getMinesMultiplier(20, game.bombs, game.revealed.length);
+    const currentMult = getMinesMultiplier(25, game.bombs, game.revealed.length);
     const winAmount = Math.floor(game.bet * currentMult);
 
     const cashoutBtn = new ButtonBuilder()
@@ -199,7 +211,7 @@ function createMinesEmbed(bet, bombs, revealedCount, currentMult, currentWin, ti
             { name: '💵 TÉT', value: `\`\`\`${formatFt(bet)}\`\`\``, inline: true },
             { name: '📈 SZORZÓ', value: `\`\`\`x${currentMult.toFixed(2)}\`\`\``, inline: true },
             { name: '💰 VÁRHATÓ NYEREMÉNY', value: `\`\`\`${formatFt(currentWin)}\`\`\``, inline: true },
-            { name: '📊 JÁTÉK ÁLLÁSA', value: `💎 Megtalált gyémántok: **${revealedCount} / ${20 - bombs}**\n💣 Bombák a pályán: **${bombs} db**`, inline: false }
+            { name: '📊 JÁTÉK ÁLLÁSA', value: `💎 Megtalált gyémántok: **${revealedCount} / ${25 - bombs}**\n💣 Bombák a pályán: **${bombs} db**`, inline: false }
         );
 }
 
@@ -327,7 +339,7 @@ const commands = [
     new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Kinek az egyenlege?')),
     new SlashCommandBuilder().setName('utalas').setDescription('Pénz küldése másnak').addUserOption(o => o.setName('user').setDescription('Kinek?').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('Összeg (Ft)').setRequired(true).setMinValue(1)),
     new SlashCommandBuilder().setName('top').setDescription('A szerver leggazdagabb tagjai'),
-    new SlashCommandBuilder().setName('mines').setDescription('Aknakereső kaszinó minijáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)).addIntegerOption(o => o.setName('bombs').setDescription('Bombák száma (1-19)').setRequired(true).setMinValue(1).setMaxValue(19)),
+    new SlashCommandBuilder().setName('mines').setDescription('Aknakereső kaszinó minijáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)).addIntegerOption(o => o.setName('bombs').setDescription('Bombák száma (1-24)').setRequired(true).setMinValue(1).setMaxValue(24)),
     new SlashCommandBuilder().setName('blackjack').setDescription('Klasszikus 21-es blackjack kártyajáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)),
     new SlashCommandBuilder().setName('iq').setDescription('IQ teszt mérés').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
     new SlashCommandBuilder().setName('meret').setDescription('Faszméret mérés').addUserOption(o => o.setName('user').setDescription('Kinek a mérete?'))
@@ -521,14 +533,18 @@ client.on('interactionCreate', async (i) => {
                 return i.reply({ content: `⏳ Még várnod kell **${remaining} percet** a következő kincsig!${isBooster ? ' (💎 Booster kedvezmény: 7 perc cooldown)' : ''}`, ephemeral: true });
             }
 
-            const isSuperChest = Math.random() < 0.01;
-            const amount = isSuperChest ? 100000 : Math.floor(Math.random() * 29001) + 1000;
+            const isSuperChest = Math.random() < 0.05;
+            const amount = isSuperChest ? 250000 : Math.floor(Math.random() * 28001) + 20000;
+
             userDb.balance += amount;
             userDb.lastTreasure = now;
             await userDb.save();
 
-            if (isSuperChest) return i.reply({ content: `✨ **SZUPER LÁDA!** ✨ Ritka kincset találtál: **${formatFt(amount)}** íródott jóvá az egyenlegeden! 🎉` });
-            return i.reply({ content: `🪙 Kinyitottad a ládát és találtál benne: **${formatFt(amount)}**-ot!` });
+            if (isSuperChest) {
+                return i.reply({ content: `✨ **SZUPER LÁDA JACKPOT!** ✨ Ritka kincset találtál: **${formatFt(amount)}** íródott jóvá az egyenlegeden! 🎉` });
+            } else {
+                return i.reply({ content: `🪙 Kinyitottad a ládát és találtál benne: **${formatFt(amount)}**-ot!` });
+            }
         }
 
         if (i.commandName === 'bal') {
@@ -560,17 +576,19 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.commandName === 'mines') {
+            await i.deferReply();
+
             const bet = i.options.getInteger('bet');
             const bombs = i.options.getInteger('bombs');
-            if (userDb.balance < bet) return i.reply({ content: '❌ Nincs elég egyenleged a játék elindításához!', ephemeral: true });
+            if (userDb.balance < bet) return i.editReply({ content: '❌ Nincs elég egyenleged a játék elindításához!' });
 
             userDb.balance -= bet;
             await userDb.save();
 
-            const grid = Array(20).fill('💎');
+            const grid = Array(25).fill('💎');
             let placed = 0;
             while (placed < bombs) {
-                const rand = Math.floor(Math.random() * 20);
+                const rand = Math.floor(Math.random() * 25);
                 if (grid[rand] !== '💣') { grid[rand] = '💣'; placed++; }
             }
 
@@ -578,7 +596,7 @@ client.on('interactionCreate', async (i) => {
             const embed = createMinesEmbed(bet, bombs, 0, 1.00, bet);
             const rows = buildMinesComponents(game);
 
-            const msg = await i.reply({ embeds: [embed], components: rows, fetchReply: true });
+            const msg = await i.editReply({ embeds: [embed], components: rows });
             game.msgId = msg.id;
             activeMines.set(msg.id, game);
             return;
@@ -611,7 +629,7 @@ client.on('interactionCreate', async (i) => {
                 await i.deleteReply().catch(() => {});
                 setTimeout(() => msg.edit({ embeds: [new EmbedBuilder().setColor('#ffaa00').setTitle('🤡 CSAK VICCELTEM!').setDescription(`**<@${user.id}>** nem lett kitiltva, maradhatsz! 🎉`)] }).catch(() => {}), 3000);
             } else if (i.commandName === 'nitro') {
-                const embed = new EmbedBuilder().setColor('#5865F2').setTitle('🎁 Discord Nitro Gift!').setDescription('Nyertél 1 hónap Discord Nitro-t! Kattints az alábbi gombra az átvételhez!').setThumbnail('[https://i.imgur.com/264293f.png](https://i.imgur.com/264293f.png)');
+                const embed = new EmbedBuilder().setColor('#5865F2').setTitle('🎁 Discord Nitro Gift!').setDescription('Nyertél 1 hónap Discord Nitro-t! Kattints az alábbi gombra az átvételhez!').setThumbnail('https://i.imgur.com/264293f.png');
                 const btn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_fake_nitro').setLabel('🎁 Claim Nitro').setStyle(ButtonStyle.Success));
                 await i.channel.send({ embeds: [embed], components: [btn] });
                 await i.deleteReply().catch(() => {});
@@ -739,6 +757,10 @@ client.on('interactionCreate', async (i) => {
                 if (playerSum > 21) {
                     game.gameOver = true;
                     activeBlackjack.delete(i.message.id);
+                    
+                    // Blackjack veszteség hozzáadása a kaszinó vault felhasználóhoz
+                    await addLossToVault(i.guild.id, game.bet);
+
                     const loseEmbed = new EmbedBuilder()
                         .setColor('#ff0000')
                         .setTitle('💥 TÚLHÚZTAD! (BUST)')
@@ -787,6 +809,8 @@ client.on('interactionCreate', async (i) => {
                 } else {
                     embedColor = '#ff0000';
                     resultText = `😢 **VESZTETTÉL!** Az osztó nyert.`;
+                    // Blackjack veszteség hozzáadása a kaszinó vault felhasználóhoz
+                    await addLossToVault(i.guild.id, game.bet);
                 }
                 await uDb.save();
 
@@ -809,7 +833,7 @@ client.on('interactionCreate', async (i) => {
             if (i.user.id !== game.userId) return i.reply({ content: '❌ Ez nem a te játékod! 🤡', ephemeral: true });
 
             if (i.customId === 'mine_cashout') {
-                const currentMult = getMinesMultiplier(20, game.bombs, game.revealed.length);
+                const currentMult = getMinesMultiplier(25, game.bombs, game.revealed.length);
                 const winAmount = Math.floor(game.bet * currentMult);
                 const uDb = await getUserDb(i.guild.id, i.user.id);
                 uDb.balance += winAmount;
@@ -834,6 +858,10 @@ client.on('interactionCreate', async (i) => {
 
                 if (game.grid[idx] === '💣') {
                     activeMines.delete(i.message.id);
+                    
+                    // Mines veszteség hozzáadása a kaszinó vault felhasználóhoz
+                    await addLossToVault(i.guild.id, game.bet);
+
                     const loseEmbed = new EmbedBuilder()
                         .setColor('#ff0000')
                         .setTitle('💥 BUMM! AKNÁRA LÉPTÉL!')
@@ -843,7 +871,7 @@ client.on('interactionCreate', async (i) => {
                 }
 
                 game.revealed.push(idx);
-                const currentMult = getMinesMultiplier(20, game.bombs, game.revealed.length);
+                const currentMult = getMinesMultiplier(25, game.bombs, game.revealed.length);
                 const currentWin = Math.floor(game.bet * currentMult);
                 const updateEmbed = createMinesEmbed(game.bet, game.bombs, game.revealed.length, currentMult, currentWin, '💎 GYÉMÁNT TALÁLAT!');
                 return i.update({ embeds: [updateEmbed], components: buildMinesComponents(game, false, false) });
