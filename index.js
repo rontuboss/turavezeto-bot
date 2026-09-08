@@ -55,7 +55,8 @@ const User = mongoose.model('User', new mongoose.Schema({
 const GuildSetting = mongoose.model('GuildSetting', new mongoose.Schema({
     guildId: String,
     casinoLossVault: { type: Number, default: 0 },
-    btcPriceFt: { type: Number, default: BASE_BTC_PRICE }
+    btcPriceFt: { type: Number, default: BASE_BTC_PRICE },
+    btcHistory: { type: [Number], default: [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE] }
 }));
 
 const Invite = mongoose.model('Invite', new mongoose.Schema({ guildId: String, userId: String, invites: Number }));
@@ -75,7 +76,7 @@ const activeBlackjack = new Map();
 const commandCooldowns = new Map();
 
 // ==========================================
-// 3. HARDVER ÉS SZOBA ADATOK
+// 3. HARDVER ÉS SZOBA ADATOK (+50% BTC TERMELÉS)
 // ==========================================
 const ROOMS = {
     alagsor: { name: '📦 Alagsori Doboz', price: 500000, maxGpus: 4 },
@@ -85,16 +86,16 @@ const ROOMS = {
 };
 
 const GPUS = {
-    gt1030: { id: 'gt1030', name: 'NVIDIA GT 1030', rarity: 'common', price: 50000, btcPerHour: 0.000004 },
-    rx550: { id: 'rx550', name: 'AMD Radeon RX 550', rarity: 'common', price: 75000, btcPerHour: 0.000006 },
-    gtx1060: { id: 'gtx1060', name: 'NVIDIA GTX 1060 6GB', rarity: 'rare', price: 300000, btcPerHour: 0.000028 },
-    rx580: { id: 'rx580', name: 'AMD Radeon RX 580', rarity: 'rare', price: 450000, btcPerHour: 0.000043 },
-    rtx3060ti: { id: 'rtx3060ti', name: 'NVIDIA RTX 3060 Ti', rarity: 'epic', price: 1500000, btcPerHour: 0.000170 },
-    rtx3080: { id: 'rtx3080', name: 'NVIDIA RTX 3080', rarity: 'epic', price: 3500000, btcPerHour: 0.000420 },
-    rtx4090: { id: 'rtx4090', name: 'NVIDIA RTX 4090', rarity: 'legendary', price: 10000000, btcPerHour: 0.001400 },
-    rx7900xtx: { id: 'rx7900xtx', name: 'AMD Radeon RX 7900 XTX', rarity: 'legendary', price: 12500000, btcPerHour: 0.001800 },
-    h100: { id: 'h100', name: 'NVIDIA H100 AI Accelerator', rarity: 'mythic', price: 45000000, btcPerHour: 0.007500 },
-    quantum: { id: 'quantum', name: 'Quantum Miner Rig X-1', rarity: 'mythic', price: 100000000, btcPerHour: 0.018000 }
+    gt1030: { id: 'gt1030', name: 'NVIDIA GT 1030', rarity: 'common', price: 50000, btcPerHour: 0.000006 },
+    rx550: { id: 'rx550', name: 'AMD Radeon RX 550', rarity: 'common', price: 75000, btcPerHour: 0.000009 },
+    gtx1060: { id: 'gtx1060', name: 'NVIDIA GTX 1060 6GB', rarity: 'rare', price: 300000, btcPerHour: 0.000042 },
+    rx580: { id: 'rx580', name: 'AMD Radeon RX 580', rarity: 'rare', price: 450000, btcPerHour: 0.0000645 },
+    rtx3060ti: { id: 'rtx3060ti', name: 'NVIDIA RTX 3060 Ti', rarity: 'epic', price: 1500000, btcPerHour: 0.000255 },
+    rtx3080: { id: 'rtx3080', name: 'NVIDIA RTX 3080', rarity: 'epic', price: 3500000, btcPerHour: 0.000630 },
+    rtx4090: { id: 'rtx4090', name: 'NVIDIA RTX 4090', rarity: 'legendary', price: 10000000, btcPerHour: 0.002100 },
+    rx7900xtx: { id: 'rx7900xtx', name: 'AMD Radeon RX 7900 XTX', rarity: 'legendary', price: 12500000, btcPerHour: 0.002700 },
+    h100: { id: 'h100', name: 'NVIDIA H100 AI Accelerator', rarity: 'mythic', price: 45000000, btcPerHour: 0.011250 },
+    quantum: { id: 'quantum', name: 'Quantum Miner Rig X-1', rarity: 'mythic', price: 100000000, btcPerHour: 0.027000 }
 };
 
 // ==========================================
@@ -129,7 +130,7 @@ const getUserDb = async (guildId, userId) => {
 async function getGuildSettings(guildId) {
     let settings = await GuildSetting.findOne({ guildId });
     if (!settings) {
-        settings = new GuildSetting({ guildId, casinoLossVault: 0, btcPriceFt: BASE_BTC_PRICE });
+        settings = new GuildSetting({ guildId, casinoLossVault: 0, btcPriceFt: BASE_BTC_PRICE, btcHistory: [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE] });
         await settings.save();
     }
     return settings;
@@ -372,41 +373,54 @@ setInterval(async () => {
     }
 }, 3 * 60 * 1000);
 
-// Óránkénti Bitcoin árfolyam ingadozás (-50% és +50% korlátok között az alapárhoz képest) & 1% áramszünet esély
+// PONTOSAN KEREK ÓRÁNKÉNT (00:00-KOR) LEFUTÓ ÁRFOLYAM ÉS ÁRAMSZÜNET IDŐZÍTŐ
+let lastTriggeredHour = '';
 setInterval(async () => {
-    try {
-        const settings = await GuildSetting.findOne({});
-        if (settings) {
-            const changePercent = (Math.random() * 0.08 - 0.04); // ±4% elmozdulás óránként
-            let newPrice = Math.floor(settings.btcPriceFt * (1 + changePercent));
-            
-            // Korlátozás: MIN = -50% (17.5M Ft), MAX = +50% (52.5M Ft)
-            const minPrice = BASE_BTC_PRICE * 0.50;
-            const maxPrice = BASE_BTC_PRICE * 1.50;
+    const bpDate = getBudapestDate();
+    const minute = bpDate.getMinutes();
+    const hourStr = bpDate.getHours().toString();
 
-            if (newPrice < minPrice) newPrice = minPrice;
-            if (newPrice > maxPrice) newPrice = maxPrice;
+    // Pontosan 00 perc 00 másodperc környékén fut le egyszer óránként
+    if (minute === 0 && lastTriggeredHour !== hourStr) {
+        lastTriggeredHour = hourStr;
+        
+        try {
+            const settings = await GuildSetting.findOne({});
+            if (settings) {
+                if (!settings.btcHistory) settings.btcHistory = [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE];
+                settings.btcHistory.push(settings.btcPriceFt);
+                if (settings.btcHistory.length > 3) settings.btcHistory.shift();
 
-            settings.btcPriceFt = newPrice;
-            await settings.save();
-        }
-
-        const users = await User.find({ "rigs.0": { $exists: true }, isBroken: false });
-        for (const u of users) {
-            if (Math.random() < 0.01) {
-                u.isBroken = true;
-                await u.save();
+                const changePercent = (Math.random() * 0.08 - 0.04);
+                let newPrice = Math.floor(settings.btcPriceFt * (1 + changePercent));
                 
-                const ch = client.channels.cache.get(CONFIG.MINER_CHANNEL);
-                if (ch) {
-                    ch.send(`⚡ 🚨 **ÁRAMSZÜNET / MEGHIBÁSODÁS!** <@${u.userId}> szerverterme leállt! Használd a \`/crypto szerviz\` parancsot a javításhoz!`).catch(() => {});
+                const minPrice = BASE_BTC_PRICE * 0.50;
+                const maxPrice = BASE_BTC_PRICE * 1.50;
+
+                if (newPrice < minPrice) newPrice = minPrice;
+                if (newPrice > maxPrice) newPrice = maxPrice;
+
+                settings.btcPriceFt = newPrice;
+                await settings.save();
+            }
+
+            const users = await User.find({ "rigs.0": { $exists: true }, isBroken: false });
+            for (const u of users) {
+                if (Math.random() < 0.01) {
+                    u.isBroken = true;
+                    await u.save();
+                    
+                    const ch = client.channels.cache.get(CONFIG.MINER_CHANNEL);
+                    if (ch) {
+                        ch.send(`⚡ 🚨 **ÁRAMSZÜNET / MEGHIBÁSODÁS!** <@${u.userId}> szerverterme leállt! Használd a \`/crypto szerviz\` parancsot a javításhoz!`).catch(() => {});
+                    }
                 }
             }
+        } catch (e) {
+            console.error('❌ Hiba az óránkénti frissítésnél:', e);
         }
-    } catch (e) {
-        console.error('❌ Hiba a bányász időzítőben:', e);
     }
-}, 60 * 60 * 1000);
+}, 10000);
 
 let lastTriggeredMinute = '';
 setInterval(async () => {
@@ -451,11 +465,15 @@ const commands = [
     new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addUserOption(o => o.setName('user').setDescription('Kinek szóljon?').setRequired(true)),
     new SlashCommandBuilder().setName('rate').setDescription('Értékelj bármit').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addStringOption(o => o.setName('thing').setDescription('Mit értékeljen?').setRequired(true)),
 
-    // ÚJ / FRISSÍTETT CRYPTO & BTC PARANCSOK
-    new SlashCommandBuilder().setName('btc').setDescription('Bitcoin árfolyam és eladás')
+    // KÜLÖNÁLLÓ /BTC PARANCS
+    new SlashCommandBuilder().setName('btc').setDescription('Bitcoin aktuális ára, 3 órás előzménye és eladás')
         .addSubcommand(s => s.setName('sell').setDescription('Bitcoin eladása készpénzért (Ft)').addNumberOption(o => o.setName('btc').setDescription('Eladandó BTC').setRequired(true))),
-    new SlashCommandBuilder().setName('crypto').setDescription('Bányász és szerverterem kezelés')
-        .addSubcommand(s => s.setName('bolt').setDescription('Bányász bolt megnyitása (Kártyák és Szobák)'))
+
+    // /MINER BOLT ÉS /CRYPTO PARANCSOK
+    new SlashCommandBuilder().setName('miner').setDescription('Bányász bolt megnyitása')
+        .addSubcommand(s => s.setName('bolt').setDescription('Bányász bolt megnyitása (Kártyák és Szobák)')),
+
+    new SlashCommandBuilder().setName('crypto').setDescription('Bányász farm és szerverterem kezelés')
         .addSubcommand(s => s.setName('farm').setDescription('Saját szerverterem és rigek állapota'))
         .addSubcommand(s => s.setName('claim').setDescription('Kitermelt Bitcoin begyűjtése'))
         .addSubcommand(s => s.setName('kartya-eladas').setDescription('Birtokolt videokártya eladása (60%-os áron)'))
@@ -589,7 +607,7 @@ client.on('interactionCreate', async (i) => {
     if (i.isChatInputCommand()) {
         const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE);
         const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
-        const allowedForMembers = ['mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'hitel', 'btc', 'crypto'];
+        const allowedForMembers = ['mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'hitel', 'btc', 'miner', 'crypto'];
 
         if (!isMember) return i.reply({ content: '❌ Nincs meg a szükséges rangod a parancsok használatához!', ephemeral: true });
         if (!allowedForMembers.includes(i.commandName) && !isStaff) return i.reply({ content: '❌ Ez a parancs kizárólag a kijelölt rangosoknak érhető el!', ephemeral: true });
@@ -602,28 +620,32 @@ client.on('interactionCreate', async (i) => {
         }
 
         // ==========================================
-        // 📈 /BTC PARANCSOK (PIAC ÉS ELADÁS)
+        // 📈 /BTC PARANCSOK (ÁRFOLYAM, ELŐZMÉNYEK ÉS ELADÁS)
         // ==========================================
         if (i.commandName === 'btc') {
             const sub = i.options.getSubcommand(false);
 
-            // Sima /btc -> Árfolyam lekérés
             if (!sub) {
                 const diffPercent = (((settings.btcPriceFt - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
                 const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
                 
+                const history = settings.btcHistory || [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE];
+                const h1 = history[history.length - 1] || BASE_BTC_PRICE;
+                const h2 = history[history.length - 2] || BASE_BTC_PRICE;
+                const h3 = history[history.length - 3] || BASE_BTC_PRICE;
+
                 const embed = new EmbedBuilder()
                     .setColor('#f7931a')
-                    .setTitle('📈 BITCOIN PIACI ÁRFOLYAM')
+                    .setTitle('📈 BITCOIN PIACI ÁRFOLYAM & ELŐZMÉNYEK')
                     .addFields(
                         { name: '🪙 Jelenlegi Árfolyam', value: `**1 BTC = ${formatFt(settings.btcPriceFt)}**`, inline: false },
-                        { name: '📊 Piaci Változás (Alapárhoz képest)', value: `\`\`\`diff\n${diffTag}\`\`\``, inline: false }
+                        { name: '📊 Változás (Alapárhoz képest)', value: `\`\`\`diff\n${diffTag}\`\`\``, inline: false },
+                        { name: '🕰️ Elmúlt 3 Óra Árfolyama', value: `• **1 órája:** ${formatFt(h1)}\n• **2 órája:** ${formatFt(h2)}\n• **3 órája:** ${formatFt(h3)}`, inline: false }
                     );
 
                 return i.reply({ embeds: [embed] });
             }
 
-            // /btc sell -> Bitcoin eladás készpénzre
             if (sub === 'sell') {
                 const amount = i.options.getNumber('btc');
                 if ((userDb.btcBalance || 0) < amount) {
@@ -640,11 +662,10 @@ client.on('interactionCreate', async (i) => {
         }
 
         // ==========================================
-        // ⚡ /CRYPTO PARANCSOK (FARM, BOLT, CLAIM, SZERVIZ)
+        // 🛒 /MINER BOLT (BÁNYÁSZ BOLT)
         // ==========================================
-        if (i.commandName === 'crypto') {
+        if (i.commandName === 'miner') {
             const sub = i.options.getSubcommand();
-
             if (sub === 'bolt') {
                 const embed = new EmbedBuilder()
                     .setColor('#f7931a')
@@ -662,6 +683,13 @@ client.on('interactionCreate', async (i) => {
 
                 return i.reply({ embeds: [embed], components: [row], ephemeral: true });
             }
+        }
+
+        // ==========================================
+        // ⚡ /CRYPTO PARANCSOK (FARM, CLAIM, SZERVIZ, ELADÁS)
+        // ==========================================
+        if (i.commandName === 'crypto') {
+            const sub = i.options.getSubcommand();
 
             if (sub === 'farm') {
                 const roomInfo = ROOMS[userDb.roomType || 'alagsor'];
@@ -844,6 +872,9 @@ client.on('interactionCreate', async (i) => {
             return i.reply({ content: `🌟 Sikeresen felvedd a heti nagylelkű jutalmat: **${formatFt(weeklyAmount)}** jóváírva az egyenlegeden! 🚀` });
         }
 
+        // ==========================================
+        // 👷 /WORK (5%-KAL CSÖKKENTETT FIZETÉS)
+        // ==========================================
         if (i.commandName === 'work') {
             const now = Date.now();
             const cd = 60 * 1000;
@@ -852,10 +883,11 @@ client.on('interactionCreate', async (i) => {
                 return i.reply({ content: `⏳ Pihenj még **${remainingSec} másodpercet** a következő munka előtt.`, ephemeral: true });
             }
 
-            const baseMin = 3750;
-            const baseMax = 12500;
+            // Alapfizetés és bónusz 5%-os csökkentése (0.95-ös szorzó)
+            const baseMin = Math.floor(3750 * 0.95); // ~3,562 Ft
+            const baseMax = Math.floor(12500 * 0.95); // ~11,875 Ft
             const randomBase = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
-            const balanceBonus = Math.floor(Math.max(0, userDb.balance) * 0.005);
+            const balanceBonus = Math.floor(Math.max(0, userDb.balance) * 0.00475); // 0.5% helyett 0.475%
             const workAmount = randomBase + balanceBonus;
 
             userDb.balance += workAmount;
@@ -1228,7 +1260,7 @@ client.on('interactionCreate', async (i) => {
             const ownerId = parts[parts.length - 1];
 
             if (ownerId && ownerId !== i.user.id && !['claim_btn'].some(k => i.customId.includes(k))) {
-                return i.reply({ content: '❌ Ez nem a te bányász bolton! Nyiss egy sajátot a `/crypto bolt` parancssal! 🤡', ephemeral: true });
+                return i.reply({ content: '❌ Ez nem a te bányász bolton! Nyiss egy sajátot a `/miner bolt` parancssal! 🤡', ephemeral: true });
             }
         }
 
@@ -1471,7 +1503,7 @@ client.on('interactionCreate', async (i) => {
             const ownerId = parts[parts.length - 1];
 
             if (ownerId && ownerId !== i.user.id) {
-                return i.reply({ content: '❌ Ez nem a te bányász bolton! Nyiss egy sajátot a `/crypto bolt` parancssal! 🤡', ephemeral: true });
+                return i.reply({ content: '❌ Ez nem a te bányász bolton! Nyiss egy sajátot a `/miner bolt` parancssal! 🤡', ephemeral: true });
             }
         }
 
