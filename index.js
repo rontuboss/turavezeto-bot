@@ -359,6 +359,7 @@ const commands = [
     new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Kinek az egyenlege?')),
     new SlashCommandBuilder().setName('stat').setDescription('Kaszinó statisztika lekérése').addUserOption(o => o.setName('user').setDescription('Kinek a statisztikája?')),
     new SlashCommandBuilder().setName('utalas').setDescription('Pénz küldése másnak (Staff rang)').addUserOption(o => o.setName('user').setDescription('Kinek?').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('Összeg (Ft)').setRequired(true).setMinValue(1)),
+    new SlashCommandBuilder().setName('removebalance').setDescription('Pénz levétele egy felhasználótól (Staff rang)').addUserOption(o => o.setName('user').setDescription('Kitől?').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('Összeg (Ft)').setRequired(true).setMinValue(1)),
     new SlashCommandBuilder().setName('top').setDescription('A szerver leggazdagabb tagjai'),
     new SlashCommandBuilder().setName('mines').setDescription('Aknakereső kaszinó minijáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)).addIntegerOption(o => o.setName('bombs').setDescription('Bombák száma (1-24)').setRequired(true).setMinValue(1).setMaxValue(24)),
     new SlashCommandBuilder().setName('blackjack').setDescription('Klasszikus 21-es blackjack kártyajáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)),
@@ -481,7 +482,7 @@ client.on('interactionCreate', async (i) => {
     if (i.isChatInputCommand()) {
         const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE);
         const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
-        const allowedForMembers = ['mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'utalas'];
+        const allowedForMembers = ['mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'utalas', 'removebalance'];
 
         if (!isMember) return i.reply({ content: '❌ Nincs meg a szükséges rangod a parancsok használatához!', ephemeral: true });
         if (!allowedForMembers.includes(i.commandName) && !isStaff) return i.reply({ content: '❌ Ez a parancs kizárólag a kijelölt rangosoknak érhető el!', ephemeral: true });
@@ -714,6 +715,23 @@ client.on('interactionCreate', async (i) => {
             return i.editReply({ content: `💸 Staff utalás: Sikeresen küldtél **${formatFt(amount)}**-ot <@${target.id}> felhasználónak!` });
         }
 
+        if (i.commandName === 'removebalance') {
+            if (!isStaff) {
+                return i.reply({ content: '❌ Ezt a parancsot kizárólag a Staff tagok használhatják!', ephemeral: true });
+            }
+
+            await i.deferReply();
+
+            const target = i.options.getUser('user');
+            const amount = i.options.getInteger('amount');
+
+            const targetDb = await getUserDb(i.guild.id, target.id);
+            targetDb.balance = Math.max(0, targetDb.balance - amount); // Ne mehessen 0 alá
+            await targetDb.save();
+
+            return i.editReply({ content: `🗑️ Staff pénzelvétel: Sikeresen levettél **${formatFt(amount)}**-ot <@${target.id}> egyenlegéből! (Új egyenleg: ${formatFt(targetDb.balance)})` });
+        }
+
         if (i.commandName === 'top') {
             const topUsers = await User.find({ guildId: i.guild.id }).sort({ balance: -1 }).limit(10);
             const guildSettings = await getGuildSettings(i.guild.id);
@@ -941,7 +959,7 @@ client.on('interactionCreate', async (i) => {
                     .setTitle('♠️ KASZINÓ BLACKJACK ASZTAL ♣️')
                     .addFields(
                         { name: '🧑 Játékos lapjai', value: `\`\`\`css\n${game.playerCards.map(c => c.display).join(' ')} (Összeg: ${playerSum})\`\`\``, inline: false },
-                        { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${dealerCards[0].display} 🎴 (Rejtett)\`\`\``, inline: false },
+                        { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${game.dealerCards[0].display} 🎴 (Rejtett)\`\`\``, inline: false },
                         { name: '💵 Tét', value: `\`\`\`${formatFt(game.bet)}\`\`\``, inline: true }
                     );
                 return i.update({ embeds: [embed] });
