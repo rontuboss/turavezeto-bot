@@ -76,7 +76,7 @@ const activeBlackjack = new Map();
 const commandCooldowns = new Map();
 
 // ==========================================
-// 3. HARDVER ÉS SZOBA ADATOK (2X KÁRTYA TERMELÉS)
+// 3. HARDVER ÉS SZOBA ADATOK (MEGEMELT KRIPTO TERMELÉS A BALANCE MIATT)
 // ==========================================
 const ROOMS = {
     alagsor: { name: '📦 Alagsori Doboz', price: 500000, maxGpus: 4 },
@@ -85,17 +85,18 @@ const ROOMS = {
     adatkozpont: { name: '⚡ Ipari Adatközpont', price: 150000000, maxGpus: 50 }
 };
 
+// Megemeltük a kártyák BTC/óra termelését, hogy megelőzzék a sima munkát!
 const GPUS = {
-    gt1030: { id: 'gt1030', name: 'NVIDIA GT 1030', rarity: 'common', price: 50000, btcPerHour: 0.000012 },
-    rx550: { id: 'rx550', name: 'AMD Radeon RX 550', rarity: 'common', price: 75000, btcPerHour: 0.000018 },
-    gtx1060: { id: 'gtx1060', name: 'NVIDIA GTX 1060 6GB', rarity: 'rare', price: 300000, btcPerHour: 0.000084 },
-    rx580: { id: 'rx580', name: 'AMD Radeon RX 580', rarity: 'rare', price: 450000, btcPerHour: 0.000129 },
-    rtx3060ti: { id: 'rtx3060ti', name: 'NVIDIA RTX 3060 Ti', rarity: 'epic', price: 1500000, btcPerHour: 0.000510 },
-    rtx3080: { id: 'rtx3080', name: 'NVIDIA RTX 3080', rarity: 'epic', price: 3500000, btcPerHour: 0.001260 },
-    rtx4090: { id: 'rtx4090', name: 'NVIDIA RTX 4090', rarity: 'legendary', price: 10000000, btcPerHour: 0.004200 },
-    rx7900xtx: { id: 'rx7900xtx', name: 'AMD Radeon RX 7900 XTX', rarity: 'legendary', price: 12500000, btcPerHour: 0.005400 },
-    h100: { id: 'h100', name: 'NVIDIA H100 AI Accelerator', rarity: 'mythic', price: 45000000, btcPerHour: 0.022500 },
-    quantum: { id: 'quantum', name: 'Quantum Miner Rig X-1', rarity: 'mythic', price: 100000000, btcPerHour: 0.054000 }
+    gt1030: { id: 'gt1030', name: 'NVIDIA GT 1030', rarity: 'common', price: 50000, btcPerHour: 0.000036 },
+    rx550: { id: 'rx550', name: 'AMD Radeon RX 550', rarity: 'common', price: 75000, btcPerHour: 0.000054 },
+    gtx1060: { id: 'gtx1060', name: 'NVIDIA GTX 1060 6GB', rarity: 'rare', price: 300000, btcPerHour: 0.000252 },
+    rx580: { id: 'rx580', name: 'AMD Radeon RX 580', rarity: 'rare', price: 450000, btcPerHour: 0.000387 },
+    rtx3060ti: { id: 'rtx3060ti', name: 'NVIDIA RTX 3060 Ti', rarity: 'epic', price: 1500000, btcPerHour: 0.001530 },
+    rtx3080: { id: 'rtx3080', name: 'NVIDIA RTX 3080', rarity: 'epic', price: 3500000, btcPerHour: 0.003780 },
+    rtx4090: { id: 'rtx4090', name: 'NVIDIA RTX 4090', rarity: 'legendary', price: 10000000, btcPerHour: 0.012600 }, // ~441k Ft/óra kártyánként
+    rx7900xtx: { id: 'rx7900xtx', name: 'AMD Radeon RX 7900 XTX', rarity: 'legendary', price: 12500000, btcPerHour: 0.016200 },
+    h100: { id: 'h100', name: 'NVIDIA H100 AI Accelerator', rarity: 'mythic', price: 45000000, btcPerHour: 0.067500 }, // ~2.36m Ft/óra kártyánként
+    quantum: { id: 'quantum', name: 'Quantum Miner Rig X-1', rarity: 'mythic', price: 100000000, btcPerHour: 0.162000 } // ~5.67m Ft/óra kártyánként
 };
 
 // Meglévő felhasználói kártyák automatikus frissítése a legújabb értékekre
@@ -121,7 +122,7 @@ async function syncUserGpuStats() {
             }
         }
         if (updatedCount > 0) {
-            console.log(`🔄 ${updatedCount} felhasználó meglévő videokártyái sikeresen frissítve lettek a legújabb értékekre!`);
+            console.log(`🔄 ${updatedCount} felhasználó meglévő videokártyái sikeresen frissítve lettek az új balance értékekre!`);
         }
     } catch (err) {
         console.error('❌ Hiba a videokártyák szinkronizálásakor:', err);
@@ -494,7 +495,7 @@ const commands = [
     new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addUserOption(o => o.setName('user').setDescription('Kinek szóljon?').setRequired(true)),
     new SlashCommandBuilder().setName('rate').setDescription('Értékelj bármit').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addStringOption(o => o.setName('thing').setDescription('Mit értékeljen?').setRequired(true)),
 
-    // KÜLÖNÁLLÓ /BTC PARANCS ( /BTC AR ÉS /BTC SELL SUBCOMMANDOKKAL )
+    // KÜLÖNÁLLÓ /BTC PARANCS
     new SlashCommandBuilder().setName('btc').setDescription('Bitcoin parancsok')
         .addSubcommand(s => s.setName('ar').setDescription('Bitcoin aktuális ára Ft-ban és az előző 3 árfolyam változás'))
         .addSubcommand(s => s.setName('sell').setDescription('Bitcoin eladása készpénzért (Ft)').addNumberOption(o => o.setName('btc').setDescription('Eladandó BTC').setRequired(true))),
@@ -653,12 +654,11 @@ client.on('interactionCreate', async (i) => {
         }
 
         // ==========================================
-        // 📈 /BTC PARANCSOK ( /BTC AR ÉS /BTC SELL )
+        // 📈 /BTC PARANCSOK
         // ==========================================
         if (i.commandName === 'btc') {
             const sub = i.options.getSubcommand();
 
-            // /btc ar -> Jelenlegi Ár + Előző 3 Árfolyam Változás (Zöld / Piros)
             if (sub === 'ar') {
                 const diffPercent = (((settings.btcPriceFt - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
                 const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
@@ -696,7 +696,6 @@ client.on('interactionCreate', async (i) => {
                 return i.reply({ embeds: [embed] });
             }
 
-            // /btc sell -> Bitcoin eladás készpénzre
             if (sub === 'sell') {
                 const amount = i.options.getNumber('btc');
                 if ((userDb.btcBalance || 0) < amount) {
@@ -737,7 +736,7 @@ client.on('interactionCreate', async (i) => {
         }
 
         // ==========================================
-        // ⚡ /CRYPTO PARANCSOK (FARM, CLAIM, SZERVIZ, ELADÁS)
+        // ⚡ /CRYPTO PARANCSOK
         // ==========================================
         if (i.commandName === 'crypto') {
             const sub = i.options.getSubcommand();
@@ -924,7 +923,7 @@ client.on('interactionCreate', async (i) => {
         }
 
         // ==========================================
-        // 👷 /WORK (PONTOSAN A FELÉRE CSÖKKENTETT FIZETÉS - 50%)
+        // 👷 /WORK (BALANCE FIX: RÖGZÍTETT FIX ALAPFIZETÉS, NINCS GYORSULÓ BÓNUSZ)
         // ==========================================
         if (i.commandName === 'work') {
             const now = Date.now();
@@ -934,12 +933,8 @@ client.on('interactionCreate', async (i) => {
                 return i.reply({ content: `⏳ Pihenj még **${remainingSec} másodpercet** a következő munka előtt.`, ephemeral: true });
             }
 
-            // Alapfizetés és bónusz felezése (0.50-es szorzó)
-            const baseMin = Math.floor(3750 * 0.50); // 1,875 Ft
-            const baseMax = Math.floor(12500 * 0.50); // 6,250 Ft
-            const randomBase = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
-            const balanceBonus = Math.floor(Math.max(0, userDb.balance) * 0.0025); // 0.5% helyett 0.25%
-            const workAmount = randomBase + balanceBonus;
+            // Fix, tisztességes kezdő fizetés bónuszok nélkül (~10,000 Ft - 25,000 Ft / perc)
+            const workAmount = Math.floor(Math.random() * (25000 - 10000 + 1)) + 10000;
 
             userDb.balance += workAmount;
             userDb.lastWork = now;
