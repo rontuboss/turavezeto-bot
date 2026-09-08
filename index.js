@@ -165,7 +165,9 @@ function getMinesMultiplier(totalTiles, bombs, revealed) {
 
 function buildMinesComponents(game, gameOver = false, won = false) {
     const rows = [];
-    for (let r = 0; r < 5; r++) {
+    
+    // Az első 4 sor (teljes 5-ös sorok: 0-19 indexek)
+    for (let r = 0; r < 4; r++) {
         const row = new ActionRowBuilder();
         for (let c = 0; c < 5; c++) {
             const idx = r * 5 + c;
@@ -187,18 +189,37 @@ function buildMinesComponents(game, gameOver = false, won = false) {
         rows.push(row);
     }
 
-    const controlRow = new ActionRowBuilder();
-    const currentMult = getMinesMultiplier(25, game.bombs, game.revealed.length);
+    // Az 5. sor: 4 db gyémánt gomb (20, 21, 22, 23) + 1 db Kifizetés gomb
+    const lastRow = new ActionRowBuilder();
+    for (let c = 0; c < 4; c++) {
+        const idx = 20 + c;
+        const btn = new ButtonBuilder().setCustomId(`mine_tile_${idx}`);
+        if (gameOver) {
+            btn.setDisabled(true);
+            if (game.grid[idx] === '💣') btn.setLabel('💣').setStyle(ButtonStyle.Danger);
+            else if (game.revealed.includes(idx)) btn.setLabel('💎').setStyle(ButtonStyle.Success);
+            else btn.setLabel('💎').setStyle(ButtonStyle.Secondary);
+        } else {
+            if (game.revealed.includes(idx)) {
+                btn.setLabel('💎').setStyle(ButtonStyle.Success).setDisabled(true);
+            } else {
+                btn.setLabel('❓').setStyle(ButtonStyle.Secondary);
+            }
+        }
+        lastRow.addComponents(btn);
+    }
+
+    const currentMult = getMinesMultiplier(24, game.bombs, game.revealed.length); // 24 mező a rácsban + 1 kifizetés gomb
     const winAmount = Math.floor(game.bet * currentMult);
 
     const cashoutBtn = new ButtonBuilder()
         .setCustomId('mine_cashout')
-        .setLabel(`💰 KIFIZETÉS ➔ ${formatFt(winAmount)}`)
+        .setLabel(`💰 KIFIZETÉS`)
         .setStyle(ButtonStyle.Success)
         .setDisabled(game.revealed.length === 0 || gameOver);
         
-    controlRow.addComponents(cashoutBtn);
-    rows.push(controlRow);
+    lastRow.addComponents(cashoutBtn);
+    rows.push(lastRow);
 
     return rows;
 }
