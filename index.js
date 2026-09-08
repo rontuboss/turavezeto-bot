@@ -125,13 +125,16 @@ async function moveTicketCategory(channel, guild, type) {
     return { categoryName: type === 'sorsolas' ? 'Nyereményjáték' : 'Partner' };
 }
 
-// --- MINES MEZŐ SZORZÓ SZÁMÍTÁS ---
+// --- MINES LASSABB, BIZTONSÁGOSABB SZORZÓ SZÁMÍTÁS ---
 function getMinesMultiplier(totalTiles, bombs, revealed) {
-    let mult = 0.96; 
+    if (revealed === 0) return 1.00;
+    // Új, sokkal szelídebb szorzó képlet, hogy ne szaladjon el az egyenleg
+    let mult = 1.0;
     for (let i = 0; i < revealed; i++) {
-        mult *= (totalTiles - i) / (totalTiles - bombs - i);
+        const riskFactor = (totalTiles - i) / (totalTiles - bombs - i);
+        mult *= (1 + (riskFactor - 1) * 0.35); // Csökkentettuk a növekedési ütemet
     }
-    return Math.max(1.01, mult);
+    return Math.max(1.05, parseFloat(mult.toFixed(2)));
 }
 
 function buildMinesComponents(game, gameOver = false, won = false) {
@@ -262,7 +265,7 @@ setInterval(async () => {
 const ADMIN_PERM = PermissionFlagsBits.ManageGuild.toString();
 
 const commands = [
-    // ADMIN / STAFF PARANCSOK (ELREJTVE A TAGOK ELŐL)
+    // ADMIN / STAFF PARANCSOK
     new SlashCommandBuilder().setName('giveaway').setDescription('Nyereményjáték parancsok').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addSubcommand(s => s.setName('start').setDescription('Indítás').addStringOption(o => o.setName('duration').setDescription('Időtartam').setRequired(true)).addStringOption(o => o.setName('prize').setDescription('Nyeremény').setRequired(true)).addIntegerOption(o => o.setName('winners').setDescription('Nyertesek').setRequired(true).setMinValue(1)).addIntegerOption(o => o.setName('booster_bonus').setDescription('Booster bónusz %')))
         .addSubcommand(s => s.setName('reroll').setDescription('Újrasorsolás').addStringOption(o => o.setName('message_id').setDescription('Üzenet ID').setRequired(true)).addIntegerOption(o => o.setName('winners').setDescription('Új nyertesek')))
@@ -279,7 +282,7 @@ const commands = [
     new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addUserOption(o => o.setName('user').setDescription('Kinek szóljon?').setRequired(true)),
     new SlashCommandBuilder().setName('rate').setDescription('Értékelj bármit').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addStringOption(o => o.setName('thing').setDescription('Mit értékeljen?').setRequired(true)),
 
-    // MINDENKI ÁLTAL LÁTHATÓ CSATORNA / TAG PARANCSOK
+    // TAG PARANCSOK
     new SlashCommandBuilder().setName('invites').setDescription('Meghívók lekérése').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
     new SlashCommandBuilder().setName('treasure').setDescription('Ingyen Forint kikérése (Boostereknek 7 perc, másnak 10 perc)'),
     new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Kinek az egyenlege?')),
@@ -507,7 +510,7 @@ client.on('interactionCreate', async (i) => {
                     await i.member.timeout(60 * 1000, 'Orosz rulett vesztes').catch(() => {});
                     await i.channel.send({ content: `💥 **BANG!** <@${i.user.id}> meghúzta a ravaszt, a fegyver eldördült! (1 perc némítás) 🪦` });
                 } else {
-                    await i.channel.send({ content: `*KIKK...* <@${i.user.id}> meghúzta a ravaszt, de a fegyver nem sült el. Túlélte! 🎯` });
+                    await i.channel.send({ content: `*KIKK...* <@${i.user.id}> meghúzta a ravaszt, a fegyver nem sült el. Túlélte! 🎯` });
                 }
                 await i.deleteReply().catch(() => {});
             }
