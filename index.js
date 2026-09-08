@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const app = express();
 const mongoose = require('mongoose');
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, PermissionFlagsBits, AttachmentBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType, PermissionFlagsBits, AttachmentBuilder } = require('discord.js');
 const ms = require('ms');
 
 // ==========================================
@@ -14,6 +14,7 @@ const CONFIG = {
     SORSOLAS_PARENTS: ['1534568444974862506', '1534631388211445891'],
     PARTNER_PARENTS: ['1534568268956827758'],
     REMINDER_CHANNEL: '1546794386581356584',
+    MINER_CHANNEL: '1547004288188948581',
     REMINDER_ROLE: '1546794488372924476',
     BOOSTER_ROLE: '1449473778386997311',
     STAFF_ROLE: '1436671411178569832',
@@ -29,9 +30,16 @@ mongoose.connect(process.env.MONGODB_URI)
     .catch(err => console.error('❌ DB hiba:', err));
 
 const User = mongoose.model('User', new mongoose.Schema({ 
-    guildId: String, userId: String, 
+    guildId: String, 
+    userId: String, 
     balance: { type: Number, default: 0 }, 
     loanDebt: { type: Number, default: 0 },
+    btcBalance: { type: Number, default: 0 },
+    roomType: { type: String, default: 'alagsor' },
+    rigs: [{ gpuId: String, name: String, btcPerHour: Number }],
+    isBroken: { type: Boolean, default: false },
+    repairUntil: { type: Number, default: 0 },
+    lastBtcClaim: { type: Number, default: Date.now },
     lastTreasure: { type: Number, default: 0 },
     lastDaily: { type: Number, default: 0 },
     lastWeekly: { type: Number, default: 0 },
@@ -42,10 +50,10 @@ const User = mongoose.model('User', new mongoose.Schema({
     }
 }));
 
-// Globális szerver statisztika (pl. kaszinó össz veszteség)
 const GuildSetting = mongoose.model('GuildSetting', new mongoose.Schema({
     guildId: String,
-    casinoLossVault: { type: Number, default: 0 }
+    casinoLossVault: { type: Number, default: 0 },
+    btcPriceFt: { type: Number, default: 35000000 }
 }));
 
 const Invite = mongoose.model('Invite', new mongoose.Schema({ guildId: String, userId: String, invites: Number }));
@@ -65,15 +73,49 @@ const activeBlackjack = new Map();
 const commandCooldowns = new Map();
 
 // ==========================================
-// 3. HELPER FUNCTIONS
+// 3. HARDVER ÉS SZOBA ADATOK
+// ==========================================
+const ROOMS = {
+    alagsor: { name: '📦 Alagsori Doboz', price: 500000, maxGpus: 4 },
+    garazs: { name: '🏠 Garázs Rig', price: 5000000, maxGpus: 12 },
+    szerver: { name: '🏢 Hivatalos Szerverterem', price: 35000000, maxGpus: 25 },
+    adatkozpont: { name: '⚡ Ipari Adatközpont', price: 150000000, maxGpus: 50 }
+};
+
+const GPUS = {
+    gt1030: { id: 'gt1030', name: 'NVIDIA GT 1030', rarity: 'common', price: 50000, btcPerHour: 0.000004 },
+    rx550: { id: 'rx550', name: 'AMD Radeon RX 550', rarity: 'common', price: 75000, btcPerHour: 0.000006 },
+    gtx1060: { id: 'gtx1060', name: 'NVIDIA GTX 1060 6GB', rarity: 'rare', price: 300000, btcPerHour: 0.000028 },
+    rx580: { id: 'rx580', name: 'AMD Radeon RX 580', rarity: 'rare', price: 450000, btcPerHour: 0.000043 },
+    rtx3060ti: { id: 'rtx3060ti', name: 'NVIDIA RTX 3060 Ti', rarity: 'epic', price: 1500000, btcPerHour: 0.000170 },
+    rtx3080: { id: 'rtx3080', name: 'NVIDIA RTX 3080', rarity: 'epic', price: 3500000, btcPerHour: 0.000420 },
+    rtx4090: { id: 'rtx4090', name: 'NVIDIA RTX 4090', rarity: 'legendary', price: 10000000, btcPerHour: 0.001400 },
+    rx7900xtx: { id: 'rx7900xtx', name: 'AMD Radeon RX 7900 XTX', rarity: 'legendary', price: 12500000, btcPerHour: 0.001800 },
+    h100: { id: 'h100', name: 'NVIDIA H100 AI Accelerator', rarity: 'mythic', price: 45000000, btcPerHour: 0.007500 },
+    quantum: { id: 'quantum', name: 'Quantum Miner Rig X-1', rarity: 'mythic', price: 100000000, btcPerHour: 0.018000 }
+};
+
+// ==========================================
+// 4. HELPER & TIME FUNCTIONS
 // ==========================================
 const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' Ft';
+const formatBtc = (amount) => amount.toFixed(8) + ' BTC';
+
+const getBudapestDate = () => {
+    return new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Budapest" }));
+};
+
+const getBudapestMidnightMs = () => {
+    const bpNow = getBudapestDate();
+    const midnight = new Date(bpNow.getFullYear(), bpNow.getMonth(), bpNow.getDate()).getTime();
+    return midnight;
+};
 
 const getUserDb = async (guildId, userId) => {
     let user = await User.findOne({ guildId, userId });
     if (!user) {
         const initialBalance = (userId === CONFIG.FIXED_USER_ID) ? 10000000 : 0;
-        user = new User({ guildId, userId, balance: initialBalance, loanDebt: 0, lastTreasure: 0, lastDaily: 0, lastWeekly: 0, lastWork: 0 });
+        user = new User({ guildId, userId, balance: initialBalance, loanDebt: 0 });
         await user.save();
     } else if (userId === CONFIG.FIXED_USER_ID && user.balance !== 10000000) {
         user.balance = 10000000;
@@ -85,7 +127,7 @@ const getUserDb = async (guildId, userId) => {
 async function getGuildSettings(guildId) {
     let settings = await GuildSetting.findOne({ guildId });
     if (!settings) {
-        settings = new GuildSetting({ guildId, casinoLossVault: 0 });
+        settings = new GuildSetting({ guildId, casinoLossVault: 0, btcPriceFt: 35000000 });
         await settings.save();
     }
     return settings;
@@ -119,7 +161,7 @@ function drawWinners(participants, count) {
 const updateStatus = (g) => g && client.user.setPresence({ activities: [{ name: `👥 ${g.memberCount} tag | /blackjack`, type: 4 }], status: 'online' });
 
 // ==========================================
-// 4. TICKET MANAGEMENT
+// 5. TICKET MANAGEMENT
 // ==========================================
 async function auditAndFixCategories(guild, categoryType) {
     if (categoryType === 'sima') {
@@ -187,7 +229,7 @@ async function moveTicketCategory(channel, guild, type) {
 }
 
 // ==========================================
-// 5. MINIGAME LOGIC (MINES 5x5 & BLACKJACK)
+// 6. MINIGAME LOGIC (MINES 5x5 & BLACKJACK)
 // ==========================================
 function getMinesMultiplier(totalTiles, bombs, revealed) {
     let mult = 0.96; 
@@ -258,7 +300,7 @@ function calculateHand(cards) {
 }
 
 // ==========================================
-// 6. GIVEAWAY & REMINDER SYSTEMS
+// 7. GIVEAWAY, REMINDERS & TIMERS
 // ==========================================
 async function endGiveaway(gwData) {
     try {
@@ -312,6 +354,49 @@ async function endGiveaway(gwData) {
     } catch (e) { console.error(e); }
 }
 
+// 5% kamat 3 percenként a meglévő egyenlegre
+setInterval(async () => {
+    try {
+        const users = await User.find({ balance: { $gt: 0 } });
+        for (const u of users) {
+            const interest = Math.floor(u.balance * 0.05);
+            if (interest > 0) {
+                u.balance += interest;
+                await u.save();
+            }
+        }
+    } catch (e) {
+        console.error('❌ Hiba a kamatszámításkor:', e);
+    }
+}, 3 * 60 * 1000);
+
+// Óránkénti Bitcoin árfolyam ingadozás és 1% áramszünet esély
+setInterval(async () => {
+    try {
+        const settings = await GuildSetting.findOne({});
+        if (settings) {
+            const changePercent = (Math.random() * 0.07 - 0.035);
+            settings.btcPriceFt = Math.floor(settings.btcPriceFt * (1 + changePercent));
+            await settings.save();
+        }
+
+        const users = await User.find({ "rigs.0": { $exists: true }, isBroken: false });
+        for (const u of users) {
+            if (Math.random() < 0.01) {
+                u.isBroken = true;
+                await u.save();
+                
+                const ch = client.channels.cache.get(CONFIG.MINER_CHANNEL);
+                if (ch) {
+                    ch.send(`⚡ 🚨 **ÁRAMSZÜNET / MEGHIBÁSODÁS!** <@${u.userId}> szerverterme leállt! Használd a \`/miner szerviz\` parancsot a javításhoz!`).catch(() => {});
+                }
+            }
+        }
+    } catch (e) {
+        console.error('❌ Hiba a bányász időzítőben:', e);
+    }
+}, 60 * 60 * 1000);
+
 let lastTriggeredMinute = '';
 setInterval(async () => {
     const timeStr = new Date().toLocaleTimeString('hu-HU', { timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -331,7 +416,7 @@ setInterval(async () => {
 }, 10000);
 
 // ==========================================
-// 7. SLASH COMMANDS REGISTRATION
+// 8. SLASH COMMANDS REGISTRATION
 // ==========================================
 const ADMIN_PERM = PermissionFlagsBits.ManageGuild.toString();
 
@@ -354,15 +439,22 @@ const commands = [
 
     new SlashCommandBuilder().setName('invites').setDescription('Meghívók lekérése').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
     new SlashCommandBuilder().setName('treasure').setDescription('Ingyen Forint kikérése (Boostereknek 7 perc, másnak 10 perc)'),
-    new SlashCommandBuilder().setName('daily').setDescription('Napi ingyen jutalom (1.000.000 Ft, éjfélimit)'),
+    new SlashCommandBuilder().setName('daily').setDescription('Napi ingyen jutalom (1.000.000 Ft, budapesti éjféli reset)'),
     new SlashCommandBuilder().setName('weekly').setDescription('Heti ingyen jutalom (10.000.000 Ft, 7 naponta)'),
-    new SlashCommandBuilder().setName('work').setDescription('Munkavégzés pénzért (Egyenlegfüggő, 1 perc cooldown)'),
+    new SlashCommandBuilder().setName('work').setDescription('Munkavégzés pénzért (1 perc cooldown)'),
     new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Kinek az egyenlege?')),
     new SlashCommandBuilder().setName('stat').setDescription('Kaszinó statisztika lekérése').addUserOption(o => o.setName('user').setDescription('Kinek a statisztikája?')),
     new SlashCommandBuilder().setName('hitel').setDescription('Banki hitel parancsok (10% kamat)')
         .addSubcommand(s => s.setName('felvesz').setDescription('Hitel felvétele (max 50 millió Ft)').addIntegerOption(o => o.setName('osszeg').setDescription('Igényelt összeg (Ft)').setRequired(true).setMinValue(1).setMaxValue(50000000)))
         .addSubcommand(s => s.setName('statusz').setDescription('Aktuális hitel lekérése'))
         .addSubcommand(s => s.setName('torleszt').setDescription('Hitel visszafizetése').addIntegerOption(o => o.setName('osszeg').setDescription('Visszafizetendő összeg (Ft)').setRequired(true).setMinValue(1))),
+    new SlashCommandBuilder().setName('miner').setDescription('Kriptobányász menürendszer')
+        .addSubcommand(s => s.setName('bolt').setDescription('Bányász bolt megnyitása'))
+        .addSubcommand(s => s.setName('farm').setDescription('Saját szerverterem és rigek állapota'))
+        .addSubcommand(s => s.setName('claim').setDescription('Kitermelt Bitcoin begyűjtése'))
+        .addSubcommand(s => s.setName('eladas').setDescription('Bitcoin eladása Ft-ért').addNumberOption(o => o.setName('btc').setDescription('Eladandó BTC').setRequired(true)))
+        .addSubcommand(s => s.setName('piac').setDescription('Bitcoin aktuális árfolyama'))
+        .addSubcommand(s => s.setName('szerviz').setDescription('Szerverterem javítása (100k Ft / 1 óra)')),
     new SlashCommandBuilder().setName('top').setDescription('A szerver leggazdagabb tagjai'),
     new SlashCommandBuilder().setName('mines').setDescription('Aknakereső kaszinó minijáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)).addIntegerOption(o => o.setName('bombs').setDescription('Bombák száma (1-24)').setRequired(true).setMinValue(1).setMaxValue(24)),
     new SlashCommandBuilder().setName('blackjack').setDescription('Klasszikus 21-es blackjack kártyajáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)),
@@ -371,7 +463,7 @@ const commands = [
 ].map(c => c.toJSON());
 
 // ==========================================
-// 8. BOT READY & EVENT LISTENERS
+// 9. BOT READY & EVENT LISTENERS
 // ==========================================
 client.once('ready', async () => {
     console.log(`Sikeresen elindult: ${client.user.tag}`);
@@ -430,7 +522,7 @@ client.on('messageCreate', async (m) => {
 });
 
 // ==========================================
-// 9. INTERACTIONS & REACTIONS (MINES & BLACKJACK)
+// 10. INTERACTIONS & REACTION HANDLERS
 // ==========================================
 client.on('messageReactionAdd', async (reaction, user) => {
     if (user.bot || !reaction.message.guild) return;
@@ -439,12 +531,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
     const game = Array.from(activeMines.values()).find(g => g.msgId === reaction.message.id);
     if (!game) return;
 
-    if (user.id !== game.userId) {
-        await reaction.users.remove(user.id).catch(() => {});
-        return;
-    }
-
-    if (game.revealed.length === 0) {
+    if (user.id !== game.userId || game.revealed.length === 0) {
         await reaction.users.remove(user.id).catch(() => {});
         return;
     }
@@ -480,17 +567,19 @@ client.on('messageReactionAdd', async (reaction, user) => {
 });
 
 client.on('interactionCreate', async (i) => {
-    if (!i.isCommand() && !i.isButton()) return;
+    if (!i.isCommand() && !i.isButton() && !i.isStringSelectMenu()) return;
 
     if (i.isChatInputCommand()) {
         const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE);
         const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
-        const allowedForMembers = ['mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'hitel'];
+        const allowedForMembers = ['mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'hitel', 'miner'];
 
         if (!isMember) return i.reply({ content: '❌ Nincs meg a szükséges rangod a parancsok használatához!', ephemeral: true });
         if (!allowedForMembers.includes(i.commandName) && !isStaff) return i.reply({ content: '❌ Ez a parancs kizárólag a kijelölt rangosoknak érhető el!', ephemeral: true });
 
         const userDb = await getUserDb(i.guild.id, i.user.id);
+        const settings = await getGuildSettings(i.guild.id);
+
         if (!userDb.stats) {
             userDb.stats = { blackjack: { played: 0, won: 0, netProfit: 0 }, mines: { played: 0, won: 0, netProfit: 0 } };
         }
@@ -506,11 +595,338 @@ client.on('interactionCreate', async (i) => {
             commandCooldowns.set(cooldownKey, Date.now());
         }
 
-        // Csak akkor tiltjuk le a kaszinót, ha a zsetonja teljesen elfogyott és MÍNUSZBA ment
         if (['blackjack', 'mines'].includes(i.commandName)) {
             if (userDb.balance < 0) {
                 return i.reply({ content: `❌ **Kaszinózási tiltás!** Mivel az egyenleged mínuszba ment (**${formatFt(userDb.balance)}**), nem játszhatsz amíg dolgozással vagy befizetéssel egyenesbe nem jössz! 🚫`, ephemeral: true });
             }
+        }
+
+        // DAILY PARANCS (Budapesti éféli reset)
+        if (i.commandName === 'daily') {
+            const bpNow = getBudapestDate();
+            const todayMidnight = getBudapestMidnightMs();
+
+            if (userDb.lastDaily >= todayMidnight) {
+                const tomorrowMidnight = todayMidnight + 24 * 60 * 60 * 1000;
+                const diffMs = tomorrowMidnight - bpNow.getTime();
+                const hours = Math.floor(diffMs / (1000 * 60 * 60));
+                const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                return i.reply({ content: `⏳ Már felvetted a mai napi jutalmat! Várj még **${hours} órát és ${minutes} percet** (Budapesti éjfélig).` });
+            }
+
+            const dailyAmount = 1000000;
+            userDb.balance += dailyAmount;
+            userDb.lastDaily = bpNow.getTime();
+            await userDb.save();
+            return i.reply({ content: `🎁 Sikeresen felvedd a mai napi jutalmat: **${formatFt(dailyAmount)}** jóváírva az egyenlegeden! 🎉` });
+        }
+
+        // WEEKLY PARANCS (Budapesti idő szerinti 7 nap)
+        if (i.commandName === 'weekly') {
+            const bpNow = getBudapestDate().getTime();
+            const weekMs = 7 * 24 * 60 * 60 * 1000;
+
+            if (bpNow - userDb.lastWeekly < weekMs) {
+                const diffMs = weekMs - (bpNow - userDb.lastWeekly);
+                const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                return i.reply({ content: `⏳ A heti jutalmat csak 7 naponta veheted fel! Várj még **${days} napot és ${hours} órát**.` });
+            }
+
+            const weeklyAmount = 10000000;
+            userDb.balance += weeklyAmount;
+            userDb.lastWeekly = bpNow;
+            await userDb.save();
+            return i.reply({ content: `🌟 Sikeresen felvedd a heti nagylelkű jutalmat: **${formatFt(weeklyAmount)}** jóváírva az egyenlegeden! 🚀` });
+        }
+
+        if (i.commandName === 'work') {
+            const now = Date.now();
+            const cd = 60 * 1000;
+            if (now - userDb.lastWork < cd) {
+                const remainingSec = Math.ceil((cd - (now - userDb.lastWork)) / 1000);
+                return i.reply({ content: `⏳ Pihenj még **${remainingSec} másodpercet** a következő munka előtt.`, ephemeral: true });
+            }
+
+            const baseMin = 3750;
+            const baseMax = 12500;
+            const randomBase = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
+            const balanceBonus = Math.floor(Math.max(0, userDb.balance) * 0.005);
+            const workAmount = randomBase + balanceBonus;
+
+            userDb.balance += workAmount;
+            userDb.lastWork = now;
+            await userDb.save();
+
+            const jobs = [
+                `Sikeresen kiszállítottál egy csomagot, és kaptál **${formatFt(workAmount)}**-ot! 📦`,
+                `Ledolgoztál egy műszakot a vándorkereskedőnél, a fizetésed: **${formatFt(workAmount)}**! 🛒`,
+                `Felsöpörtél a kaszinóban, a jutalmad: **${formatFt(workAmount)}**! 🧹`,
+                `Besegítettél a szerver karbantartásába, kaptál **${formatFt(workAmount)}**-ot! 🛠️`,
+                `💻 Illegális kripto bányászatot futtattál a szerver alagsorában, és bányásztál **${formatFt(workAmount)}**-ot! ⚡`
+            ];
+            return i.reply({ content: jobs[Math.floor(Math.random() * jobs.length)] });
+        }
+
+        if (i.commandName === 'treasure') {
+            const now = Date.now();
+            const isBooster = i.member?.roles?.cache?.has(CONFIG.BOOSTER_ROLE);
+            const cd = (isBooster ? 7 : 10) * 60 * 1000;
+
+            if (now - userDb.lastTreasure < cd) {
+                const remaining = Math.ceil((cd - (now - userDb.lastTreasure)) / 1000 / 60);
+                return i.reply({ content: `⏳ Még várnod kell **${remaining} percet** a következő kincsig!${isBooster ? ' (💎 Booster kedvezmény: 7 perc cooldown)' : ''}`, ephemeral: true });
+            }
+
+            const isSuperChest = Math.random() < 0.05;
+            const baseMin = 25000;
+            const baseMax = 60000;
+            const randomBase = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
+            const balanceBonus = Math.floor(Math.max(0, userDb.balance) * 0.01);
+            const amount = isSuperChest ? 312500 + Math.floor(Math.max(0, userDb.balance) * 0.05) : randomBase + balanceBonus;
+
+            userDb.balance += amount;
+            userDb.lastTreasure = now;
+            await userDb.save();
+
+            if (isSuperChest) {
+                return i.reply({ content: `✨ **SZUPER LÁDA JACKPOT!** ✨ Ritka kincset találtál: **${formatFt(amount)}** íródott jóvá az egyenlegeden! 🎉` });
+            } else {
+                return i.reply({ content: `🪙 Kinyitottad a ládát és találtál benne: **${formatFt(amount)}**-ot!` });
+            }
+        }
+
+        if (i.commandName === 'bal') {
+            const target = i.options.getUser('user') || i.user;
+            const targetDb = await getUserDb(i.guild.id, target.id);
+            return i.reply({ content: `💳 **${target.username}** egyenlege:\n• Cash: **${formatFt(targetDb.balance)}** ${targetDb.loanDebt > 0 ? `(Hitel tartozás: ${formatFt(targetDb.loanDebt)})` : ''}\n• Bitcoin: **${formatBtc(targetDb.btcBalance || 0)}**` });
+        }
+
+        if (i.commandName === 'stat') {
+            const target = i.options.getUser('user') || i.user;
+            const targetDb = await getUserDb(i.guild.id, target.id);
+            const s = targetDb.stats || { blackjack: { played: 0, won: 0, netProfit: 0 }, mines: { played: 0, won: 0, netProfit: 0 } };
+
+            const totalPlayed = s.blackjack.played + s.mines.played;
+            const totalWon = s.blackjack.won + s.mines.won;
+            const overallWinRate = totalPlayed > 0 ? ((totalWon / totalPlayed) * 100).toFixed(1) : 0;
+            const overallProfit = s.blackjack.netProfit + s.mines.netProfit;
+
+            const bjWinRate = s.blackjack.played > 0 ? ((s.blackjack.won / s.blackjack.played) * 100).toFixed(1) : 0;
+            const minesWinRate = s.mines.played > 0 ? ((s.mines.won / s.mines.played) * 100).toFixed(1) : 0;
+
+            const overallDiffTag = overallProfit >= 0 ? `+${formatFt(overallProfit)}` : `-${formatFt(Math.abs(overallProfit))}`;
+            const bjDiffTag = s.blackjack.netProfit >= 0 ? `+${formatFt(s.blackjack.netProfit)}` : `-${formatFt(Math.abs(s.blackjack.netProfit))}`;
+            const minesDiffTag = s.mines.netProfit >= 0 ? `+${formatFt(s.mines.netProfit)}` : `-${formatFt(Math.abs(s.mines.netProfit))}`;
+
+            const embed = new EmbedBuilder()
+                .setColor('#00f2fe')
+                .setTitle(`📊 Kaszinó Statisztika: ${target.username}`)
+                .addFields(
+                    { name: '🌐 Összesített Áttekintés', value: `> 📈 **Nyerési arány:** ${overallWinRate}%\n> 🎮 **Lejátszott körök:** ${totalPlayed} db\n> 💰 **Profit:** \`\`\`diff\n${overallDiffTag}\`\`\``, inline: false },
+                    { name: '♠️ Blackjack Statisztika', value: `• **Arány:** ${bjWinRate}% (${s.blackjack.won}/${s.blackjack.played})\n• **Profit:** \`\`\`diff\n${bjDiffTag}\`\`\``, inline: true },
+                    { name: '💣 Mines Statisztika', value: `• **Arány:** ${minesWinRate}% (${s.mines.won}/${s.mines.played})\n• **Profit:** \`\`\`diff\n${minesDiffTag}\`\`\``, inline: true }
+                );
+
+            return i.reply({ embeds: [embed] });
+        }
+
+        if (i.commandName === 'hitel') {
+            const sub = i.options.getSubcommand();
+
+            if (sub === 'felvesz') {
+                if (userDb.loanDebt > 0 || userDb.balance < 0) {
+                    return i.reply({ content: `❌ Már van egy aktív hiteled (**${formatFt(userDb.loanDebt)}**) vagy mínuszos az egyenleged! Előbb fizesd vissza.`, ephemeral: true });
+                }
+
+                const amount = i.options.getInteger('osszeg');
+                if (amount > 50000000) {
+                    return i.reply({ content: `❌ Legfeljebb 50 000 000 Ft hitelt vehetsz fel!`, ephemeral: true });
+                }
+
+                const debtWithInterest = Math.floor(amount * 1.10);
+                userDb.balance += amount;
+                userDb.loanDebt = debtWithInterest; 
+                await userDb.save();
+
+                return i.reply({ content: `🏦 Sikeresen felvettél **${formatFt(amount)}** hitelt! Jóváírva az egyenlegeden.\n📈 **Kamat (10%):** ${formatFt(debtWithInterest - amount)}\n📋 **Összes visszafizetendő:** **${formatFt(debtWithInterest)}**` });
+            }
+
+            if (sub === 'statusz') {
+                return i.reply({ content: `📋 **Hitel Státuszod:**\n• Egyenleg: **${formatFt(userDb.balance)}**\n• Visszafizetendő tartozás (kamatostul): **${formatFt(userDb.loanDebt)}**` });
+            }
+
+            if (sub === 'torleszt') {
+                const amount = i.options.getInteger('osszeg');
+                if (userDb.loanDebt <= 0) return i.reply({ content: `❌ Nincs aktív hiteltartozásod!`, ephemeral: true });
+                if (userDb.balance < amount) return i.reply({ content: `❌ Nincs elég pénzed a zsebedben ehhez a törlesztéshez!`, ephemeral: true });
+
+                const payAmount = Math.min(amount, userDb.loanDebt);
+                userDb.balance -= payAmount;
+                userDb.loanDebt -= payAmount;
+                await userDb.save();
+
+                return i.reply({ content: `✅ Sikeresen törlesztettél **${formatFt(payAmount)}**-ot a hiteledből!\n• Hátralévő tartozás: **${formatFt(userDb.loanDebt)}**\n• Új egyenleg: **${formatFt(userDb.balance)}**` });
+            }
+        }
+
+        // MINER PARANCSOK
+        if (i.commandName === 'miner') {
+            const sub = i.options.getSubcommand();
+
+            if (sub === 'bolt') {
+                const embed = new EmbedBuilder()
+                    .setColor('#f7931a')
+                    .setTitle('🛒 KRIPTOBÁNYÁSZ BOLT')
+                    .setDescription('Válassz az alábbi lehetőségek közül gombok segítségével!')
+                    .addFields(
+                        { name: '🖥️ Videokártyák', value: 'Vásárolj bányászkártyákat a kapacitásod erejéig!', inline: true },
+                        { name: '🏢 Szerverterem', value: 'Bővítsd a helyiségedet több férőhelyért!', inline: true }
+                    );
+
+                const row = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('miner_menu_gpus').setLabel('🖥️ Videokártyák').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId('miner_menu_rooms').setLabel('🏢 Szerverterem Bővítés').setStyle(ButtonStyle.Success)
+                );
+
+                return i.reply({ embeds: [embed], components: [row] });
+            }
+
+            if (sub === 'farm') {
+                const roomInfo = ROOMS[userDb.roomType || 'alagsor'];
+                const gpuCount = userDb.rigs ? userDb.rigs.length : 0;
+                const now = Date.now();
+                const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
+                
+                let btcPerHourTotal = 0;
+                if (userDb.rigs && !userDb.isBroken) {
+                    btcPerHourTotal = userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0);
+                }
+                const minedBtc = hoursPassed * btcPerHourTotal;
+
+                let statusText = '🟢 **Működik**';
+                if (userDb.isBroken) {
+                    if (userDb.repairUntil > now) {
+                        const remMin = Math.ceil((userDb.repairUntil - now) / (1000 * 60));
+                        statusText = `🛠️ **Szerelés alatt (${remMin} perc van hátra)**`;
+                    } else if (userDb.repairUntil > 0 && userDb.repairUntil <= now) {
+                        userDb.isBroken = false;
+                        userDb.repairUntil = 0;
+                        await userDb.save();
+                    } else {
+                        statusText = '⚡ **ÁRAMSZÜNET / MEGHIBÁSODÁS (Szerviz szükséges!)**';
+                    }
+                }
+
+                const embed = new EmbedBuilder()
+                    .setColor('#00f2fe')
+                    .setTitle(`⚡ ${i.user.username} Bányász Farmja`)
+                    .addFields(
+                        { name: '🏢 Helyiség', value: `${roomInfo.name} (${gpuCount}/${roomInfo.maxGpus} kártya)`, inline: true },
+                        { name: '📊 Státusz', value: statusText, inline: true },
+                        { name: '📈 Termelés', value: `**${formatBtc(btcPerHourTotal)}** / óra`, inline: false },
+                        { name: '🪙 Begyűjthető Bitcoin', value: `**${formatBtc(minedBtc)}** (~${formatFt(minedBtc * settings.btcPriceFt)})`, inline: false },
+                        { name: '💳 Egyenlegeid', value: `• Wallet: **${formatBtc(userDb.btcBalance || 0)}**\n• Cash: **${formatFt(userDb.balance)}**`, inline: false }
+                    );
+
+                const row = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('miner_claim_btn').setLabel('💰 BTC Begyűjtése').setStyle(ButtonStyle.Success).setDisabled(minedBtc <= 0 || userDb.isBroken)
+                );
+
+                return i.reply({ embeds: [embed], components: [row] });
+            }
+
+            if (sub === 'claim') {
+                if (userDb.isBroken) return i.reply({ content: '❌ A szervertermed jelenleg le van állva! Szervizelés szükséges.', ephemeral: true });
+
+                const now = Date.now();
+                const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
+                let btcPerHourTotal = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0) : 0;
+                const minedBtc = hoursPassed * btcPerHourTotal;
+
+                if (minedBtc <= 0) return i.reply({ content: '❌ Még nincs begyűjthető Bitcoinod!', ephemeral: true });
+
+                userDb.btcBalance = (userDb.btcBalance || 0) + minedBtc;
+                userDb.lastBtcClaim = now;
+                await userDb.save();
+
+                return i.reply({ content: `🎉 Sikeresen begyűjtöttél **${formatBtc(minedBtc)}** Bitcoin-t!` });
+            }
+
+            if (sub === 'eladas') {
+                const amount = i.options.getNumber('btc');
+                if ((userDb.btcBalance || 0) < amount) return i.reply({ content: '❌ Nincs ennyi Bitcoinod!', ephemeral: true });
+
+                const earnFt = Math.floor(amount * settings.btcPriceFt);
+                userDb.btcBalance -= amount;
+                userDb.balance += earnFt;
+                await userDb.save();
+
+                return i.reply({ content: `💰 Sikeresen eladtál **${formatBtc(amount)}** Bitcoin-t **${formatFt(earnFt)}** készpénzért! (Árfolyam: ${formatFt(settings.btcPriceFt)} / BTC)` });
+            }
+
+            if (sub === 'piac') {
+                return i.reply({ content: `📈 **BITCOIN PIACI ÁRFOLYAM:**\n• 1 BTC = **${formatFt(settings.btcPriceFt)}**` });
+            }
+
+            if (sub === 'szerviz') {
+                if (!userDb.isBroken) return i.reply({ content: '✅ A szervertermednek semmi baja!', ephemeral: true });
+                if (userDb.repairUntil > Date.now()) return i.reply({ content: '⏳ A szerelés már folyamatban van!', ephemeral: true });
+                if (userDb.balance < 100000) return i.reply({ content: '❌ Nincs elég pénzed a szervizre! (Ára: 100 000 Ft)', ephemeral: true });
+
+                userDb.balance -= 100000;
+                userDb.repairUntil = Date.now() + (60 * 60 * 1000);
+                await userDb.save();
+
+                return i.reply({ content: '🔧 **Szerviz elindítva!** A szerverterem **1 óra múlva** újra működni fog!' });
+            }
+        }
+
+        if (i.commandName === 'top') {
+            const topUsers = await User.find({ guildId: i.guild.id }).sort({ balance: -1 }).limit(10);
+            const totalLoss = settings.casinoLossVault;
+
+            let desc = `🔴 **Globális kaszinó veszteség:** \`\`\`diff\n-${formatFt(totalLoss)}\`\`\`\n`;
+            desc += `👑 **A leggazdagabb tagok:**\n`;
+            
+            topUsers.forEach((u, index) => {
+                desc += `**${index + 1}.** <@${u.userId}> — **${formatFt(u.balance)}**\n`;
+            });
+
+            const embed = new EmbedBuilder()
+                .setColor('#ffd700')
+                .setTitle('🏆 A Szerver Leggazdagabb Tagjai & Kaszinó Stat')
+                .setDescription(desc || 'Még senkinek sincs pénze.');
+            
+            return i.reply({ embeds: [embed] });
+        }
+
+        if (i.commandName === 'mines') {
+            await i.deferReply();
+            const bet = i.options.getInteger('bet');
+            const bombs = i.options.getInteger('bombs');
+            if (userDb.balance < bet) return i.editReply({ content: '❌ Nincs elég egyenleged a játék elindításához!' });
+
+            userDb.balance -= bet;
+            await userDb.save();
+
+            const grid = Array(25).fill('💎');
+            let placed = 0;
+            while (placed < bombs) {
+                const rand = Math.floor(Math.random() * 25);
+                if (grid[rand] !== '💣') { grid[rand] = '💣'; placed++; }
+            }
+
+            const game = { userId: i.user.id, bet, bombs, grid, revealed: [] };
+            const embed = createMinesEmbed(bet, bombs, 0, 1.00, bet);
+            const rows = buildMinesComponents(game);
+
+            const msg = await i.editReply({ embeds: [embed], components: rows });
+            game.msgId = msg.id;
+            await msg.react('✅');
+
+            activeMines.set(msg.id, game);
+            return;
         }
 
         if (i.commandName === 'blackjack') {
@@ -566,239 +982,6 @@ client.on('interactionCreate', async (i) => {
 
             const msg = await i.reply({ embeds: [embed], components: [row], fetchReply: true });
             activeBlackjack.set(msg.id, game);
-            return;
-        }
-
-        if (i.commandName === 'daily') {
-            const now = new Date();
-            const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-
-            if (userDb.lastDaily >= todayMidnight) {
-                const tomorrowMidnight = todayMidnight + 24 * 60 * 60 * 1000;
-                const diffMs = tomorrowMidnight - now.getTime();
-                const hours = Math.floor(diffMs / (1000 * 60 * 60));
-                const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-                return i.reply({ content: `⏳ Már felvetted a mai napi jutalmat! Várj még **${hours} órát és ${minutes} percet**.` });
-            }
-
-            const dailyAmount = 1000000; // 1 millió Ft
-            userDb.balance += dailyAmount;
-            userDb.lastDaily = now.getTime();
-            await userDb.save();
-            return i.reply({ content: `🎁 Sikeresen felvedd a mai napi jutalmat: **${formatFt(dailyAmount)}** jóváírva az egyenlegeden! 🎉` });
-        }
-
-        if (i.commandName === 'weekly') {
-            const now = Date.now();
-            const weekMs = 7 * 24 * 60 * 60 * 1000;
-
-            if (now - userDb.lastWeekly < weekMs) {
-                const diffMs = weekMs - (now - userDb.lastWeekly);
-                const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-                const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-                return i.reply({ content: `⏳ A heti jutalmat csak 7 naponta veheted fel! Várj még **${days} napot és ${hours} órát**.` });
-            }
-
-            const weeklyAmount = 10000000; // 10 millió Ft
-            userDb.balance += weeklyAmount;
-            userDb.lastWeekly = now;
-            await userDb.save();
-            return i.reply({ content: `🌟 Sikeresen felvedd a heti nagylelkű jutalmat: **${formatFt(weeklyAmount)}** jóváírva az egyenlegeden! 🚀` });
-        }
-
-        if (i.commandName === 'work') {
-            const now = Date.now();
-            const cd = 60 * 1000;
-            if (now - userDb.lastWork < cd) {
-                const remainingSec = Math.ceil((cd - (now - userDb.lastWork)) / 1000);
-                return i.reply({ content: `⏳ Pihenj még **${remainingSec} másodpercet** a következő munka előtt.`, ephemeral: true });
-            }
-
-            const baseMin = 3000;
-            const baseMax = 10000;
-            const randomBase = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
-            const balanceBonus = Math.floor(Math.max(0, userDb.balance) * 0.005);
-            const workAmount = randomBase + balanceBonus;
-
-            userDb.balance += workAmount;
-            userDb.lastWork = now;
-            await userDb.save();
-
-            const jobs = [
-                `Sikeresen kiszállítottál egy csomagot, és kaptál **${formatFt(workAmount)}**-ot! 📦`,
-                `Ledolgoztál egy műszakot a vándorkereskedőnél, a fizetésed: **${formatFt(workAmount)}**! 🛒`,
-                `Felsöpörtél a kaszinóban, a jutalmad: **${formatFt(workAmount)}**! 🧹`,
-                `Besegítettél a szerver karbantartásába, kaptál **${formatFt(workAmount)}**-ot! 🛠️`
-            ];
-            return i.reply({ content: jobs[Math.floor(Math.random() * jobs.length)] });
-        }
-
-        if (i.commandName === 'treasure') {
-            const now = Date.now();
-            const isBooster = i.member?.roles?.cache?.has(CONFIG.BOOSTER_ROLE);
-            const cd = (isBooster ? 7 : 10) * 60 * 1000;
-
-            if (now - userDb.lastTreasure < cd) {
-                const remaining = Math.ceil((cd - (now - userDb.lastTreasure)) / 1000 / 60);
-                return i.reply({ content: `⏳ Még várnod kell **${remaining} percet** a következő kincsig!${isBooster ? ' (💎 Booster kedvezmény: 7 perc cooldown)' : ''}`, ephemeral: true });
-            }
-
-            const isSuperChest = Math.random() < 0.05;
-            const baseMin = 20000;
-            const baseMax = 48000;
-            const randomBase = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
-            const balanceBonus = Math.floor(Math.max(0, userDb.balance) * 0.01);
-            const amount = isSuperChest ? 250000 + Math.floor(Math.max(0, userDb.balance) * 0.05) : randomBase + balanceBonus;
-
-            userDb.balance += amount;
-            userDb.lastTreasure = now;
-            await userDb.save();
-
-            if (isSuperChest) {
-                return i.reply({ content: `✨ **SZUPER LÁDA JACKPOT!** ✨ Ritka kincset találtál: **${formatFt(amount)}** íródott jóvá az egyenlegeden! 🎉` });
-            } else {
-                return i.reply({ content: `🪙 Kinyitottad a ládát és találtál benne: **${formatFt(amount)}**-ot!` });
-            }
-        }
-
-        if (i.commandName === 'bal') {
-            const target = i.options.getUser('user') || i.user;
-            const targetDb = await getUserDb(i.guild.id, target.id);
-            return i.reply({ content: `💳 **${target.username}** egyenlege: **${formatFt(targetDb.balance)}** ${targetDb.loanDebt > 0 ? `(Hitel tartozás kamatostul: ${formatFt(targetDb.loanDebt)})` : ''}` });
-        }
-
-        if (i.commandName === 'stat') {
-            const target = i.options.getUser('user') || i.user;
-            const targetDb = await getUserDb(i.guild.id, target.id);
-            const s = targetDb.stats || { blackjack: { played: 0, won: 0, netProfit: 0 }, mines: { played: 0, won: 0, netProfit: 0 } };
-
-            const totalPlayed = s.blackjack.played + s.mines.played;
-            const totalWon = s.blackjack.won + s.mines.won;
-            const overallWinRate = totalPlayed > 0 ? ((totalWon / totalPlayed) * 100).toFixed(1) : 0;
-            const overallProfit = s.blackjack.netProfit + s.mines.netProfit;
-
-            const bjWinRate = s.blackjack.played > 0 ? ((s.blackjack.won / s.blackjack.played) * 100).toFixed(1) : 0;
-            const minesWinRate = s.mines.played > 0 ? ((s.mines.won / s.mines.played) * 100).toFixed(1) : 0;
-
-            const overallDiffTag = overallProfit >= 0 ? `+${formatFt(overallProfit)}` : `-${formatFt(Math.abs(overallProfit))}`;
-            const bjDiffTag = s.blackjack.netProfit >= 0 ? `+${formatFt(s.blackjack.netProfit)}` : `-${formatFt(Math.abs(s.blackjack.netProfit))}`;
-            const minesDiffTag = s.mines.netProfit >= 0 ? `+${formatFt(s.mines.netProfit)}` : `-${formatFt(Math.abs(s.mines.netProfit))}`;
-
-            const embed = new EmbedBuilder()
-                .setColor('#00f2fe')
-                .setTitle(`📊 Kaszinó Statisztika: ${target.username}`)
-                .addFields(
-                    { 
-                        name: '🌐 Összesített Áttekintés (Overall)', 
-                        value: `> 📈 **Nyerési arány:** ${overallWinRate}%\n> 🎮 **Lejátszott körök:** ${totalPlayed} db\n> 💰 **Profit:** \`\`\`diff\n${overallDiffTag}\`\`\``, 
-                        inline: false 
-                    },
-                    { 
-                        name: '♠️ Blackjack Statisztika', 
-                        value: `• **Arány:** ${bjWinRate}% (${s.blackjack.won}/${s.blackjack.played})\n• **Profit:** \`\`\`diff\n${bjDiffTag}\`\`\``, 
-                        inline: true 
-                    },
-                    { 
-                        name: '💣 Mines Statisztika', 
-                        value: `• **Arány:** ${minesWinRate}% (${s.mines.won}/${s.mines.played})\n• **Profit:** \`\`\`diff\n${minesDiffTag}\`\`\``, 
-                        inline: true 
-                    }
-                );
-
-            return i.reply({ embeds: [embed] });
-        }
-
-        if (i.commandName === 'hitel') {
-            const sub = i.options.getSubcommand();
-
-            if (sub === 'felvesz') {
-                if (userDb.loanDebt > 0 || userDb.balance < 0) {
-                    return i.reply({ content: `❌ Már van egy aktív hiteled (**${formatFt(userDb.loanDebt)}**) vagy mínuszos az egyenleged! Előbb fizesd vissza.`, ephemeral: true });
-                }
-
-                const amount = i.options.getInteger('osszeg');
-                if (amount > 50000000) {
-                    return i.reply({ content: `❌ Legfeljebb 50 000 000 Ft hitelt vehetsz fel!`, ephemeral: true });
-                }
-
-                // 10% kamat felszámítása a felvett összegre
-                const debtWithInterest = Math.floor(amount * 1.10);
-
-                userDb.balance += amount;
-                userDb.loanDebt = debtWithInterest; 
-                await userDb.save();
-
-                return i.reply({ content: `🏦 Sikeresen felvettél **${formatFt(amount)}** hitelt! Jóváírva az egyenlegeden.\n📈 **Kamat (10%):** ${formatFt(debtWithInterest - amount)}\n📋 **Összes visszafizetendő:** **${formatFt(debtWithInterest)}**\n\n*Jó szórakozást a kaszinóban! 🎰*` });
-            }
-
-            if (sub === 'statusz') {
-                return i.reply({ content: `📋 **Hitel Státuszod:**\n• Egyenleg: **${formatFt(userDb.balance)}**\n• Visszafizetendő tartozás (kamatostul): **${formatFt(userDb.loanDebt)}**` });
-            }
-
-            if (sub === 'torleszt') {
-                const amount = i.options.getInteger('osszeg');
-                if (userDb.loanDebt <= 0) {
-                    return i.reply({ content: `❌ Nincs aktív hiteltartozásod!`, ephemeral: true });
-                }
-                if (userDb.balance < amount) {
-                    return i.reply({ content: `❌ Nincs elég pénzed a zsebedben ehhez a törlesztéshez! (Egyenleged: ${formatFt(userDb.balance)})`, ephemeral: true });
-                }
-
-                const payAmount = Math.min(amount, userDb.loanDebt);
-                userDb.balance -= payAmount;
-                userDb.loanDebt -= payAmount;
-                await userDb.save();
-
-                return i.reply({ content: `✅ Sikeresen törlesztettél **${formatFt(payAmount)}**-ot a hiteledből!\n• Hátralévő tartozás: **${formatFt(userDb.loanDebt)}**\n• Új egyenleg: **${formatFt(userDb.balance)}**` });
-            }
-        }
-
-        if (i.commandName === 'top') {
-            const topUsers = await User.find({ guildId: i.guild.id }).sort({ balance: -1 }).limit(10);
-            const guildSettings = await getGuildSettings(i.guild.id);
-            const totalLoss = guildSettings.casinoLossVault;
-
-            let desc = `🔴 **Globális kaszinó veszteség:** \`\`\`diff\n-${formatFt(totalLoss)}\`\`\`\n`;
-            desc += `👑 **A leggazdagabb tagok:**\n`;
-            
-            topUsers.forEach((u, index) => {
-                desc += `**${index + 1}.** <@${u.userId}> — **${formatFt(u.balance)}**\n`;
-            });
-
-            const embed = new EmbedBuilder()
-                .setColor('#ffd700')
-                .setTitle('🏆 A Szerver Leggazdagabb Tagjai & Kaszinó Stat')
-                .setDescription(desc || 'Még senkinek sincs pénze.');
-            
-            return i.reply({ embeds: [embed] });
-        }
-
-        if (i.commandName === 'mines') {
-            await i.deferReply();
-
-            const bet = i.options.getInteger('bet');
-            const bombs = i.options.getInteger('bombs');
-            if (userDb.balance < bet) return i.editReply({ content: '❌ Nincs elég egyenleged a játék elindításához!' });
-
-            userDb.balance -= bet;
-            await userDb.save();
-
-            const grid = Array(25).fill('💎');
-            let placed = 0;
-            while (placed < bombs) {
-                const rand = Math.floor(Math.random() * 25);
-                if (grid[rand] !== '💣') { grid[rand] = '💣'; placed++; }
-            }
-
-            const game = { userId: i.user.id, bet, bombs, grid, revealed: [] };
-            const embed = createMinesEmbed(bet, bombs, 0, 1.00, bet);
-            const rows = buildMinesComponents(game);
-
-            const msg = await i.editReply({ embeds: [embed], components: rows });
-            game.msgId = msg.id;
-            await msg.react('✅');
-
-            activeMines.set(msg.id, game);
             return;
         }
 
@@ -941,15 +1124,98 @@ client.on('interactionCreate', async (i) => {
         }
     }
 
+    // ==========================================
+    // GOMB- ÉS MENÜINTERAKCIÓK
+    // ==========================================
     if (i.isButton()) {
+        const userDb = await getUserDb(i.guild.id, i.user.id);
+
+        if (i.customId === 'miner_menu_gpus') {
+            const select = new StringSelectMenuBuilder()
+                .setCustomId('select_gpu_rarity')
+                .setPlaceholder('Válassz ritkasági kategóriát...')
+                .addOptions([
+                    { label: 'Common (Gyakori)', value: 'common', description: 'Olcsó belépő szintű kártyák' },
+                    { label: 'Rare (Ritka)', value: 'rare', description: 'Megbízható középkategória' },
+                    { label: 'Epic (Epikus)', value: 'epic', description: 'Nagy teljesítményű rigek' },
+                    { label: 'Legendary (Legendás)', value: 'legendary', description: 'Ipari bányász monstrumok' },
+                    { label: 'Mythic (Isteni)', value: 'mythic', description: 'Kvantum és AI gyorsítók' }
+                ]);
+
+            const row1 = new ActionRowBuilder().addComponents(select);
+            const row2 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('miner_back_main').setLabel('◀️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
+            );
+
+            return i.update({ embeds: [new EmbedBuilder().setColor('#f7931a').setTitle('🖥️ VIDEOKÁRTYA KATEGÓRIÁK').setDescription('Válassz ki egy kategóriát a gördülőmenüből!')], components: [row1, row2] });
+        }
+
+        if (i.customId === 'miner_menu_rooms') {
+            const embed = new EmbedBuilder()
+                .setColor('#00f2fe')
+                .setTitle('🏢 SZERVERTEREM BŐVÍTÉS')
+                .setDescription('Vásárolj nagyobb helyiséget, hogy több videokártyát tudj elhelyezni!')
+                .addFields(
+                    { name: '📦 Alagsori Doboz', value: 'Ár: **500 000 Ft** | Férőhely: **4 db**', inline: false },
+                    { name: '🏠 Garázs Rig', value: 'Ár: **5 000 000 Ft** | Férőhely: **12 db**', inline: false },
+                    { name: '🏢 Hivatalos Szerverterem', value: 'Ár: **35 000 000 Ft** | Férőhely: **25 db**', inline: false },
+                    { name: '⚡ Ipari Adatközpont', value: 'Ár: **150 000 000 Ft** | Férőhely: **50 db**', inline: false }
+                );
+
+            const select = new StringSelectMenuBuilder()
+                .setCustomId('select_buy_room')
+                .setPlaceholder('Válassz szobát a megvásárláshoz...')
+                .addOptions([
+                    { label: 'Garázs Rig (5 000 000 Ft)', value: 'garazs' },
+                    { label: 'Hivatalos Szerverterem (35 000 000 Ft)', value: 'szerver' },
+                    { label: 'Ipari Adatközpont (150 000 000 Ft)', value: 'adatkozpont' }
+                ]);
+
+            const row1 = new ActionRowBuilder().addComponents(select);
+            const row2 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('miner_back_main').setLabel('◀️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
+            );
+
+            return i.update({ embeds: [embed], components: [row1, row2] });
+        }
+
+        if (i.customId === 'miner_back_main') {
+            const embed = new EmbedBuilder()
+                .setColor('#f7931a')
+                .setTitle('🛒 KRIPTOBÁNYÁSZ BOLT')
+                .setDescription('Válassz az alábbi lehetőségek közül gombok segítségével!')
+                .addFields(
+                    { name: '🖥️ Videokártyák', value: 'Vásárolj bányászkártyákat a kapacitásod erejéig!', inline: true },
+                    { name: '🏢 Szerverterem', value: 'Bővítsd a helyiségedet több férőhelyért!', inline: true }
+                );
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('miner_menu_gpus').setLabel('🖥️ Videokártyák').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('miner_menu_rooms').setLabel('🏢 Szerverterem Bővítés').setStyle(ButtonStyle.Success)
+            );
+
+            return i.update({ embeds: [embed], components: [row] });
+        }
+
+        if (i.customId === 'miner_claim_btn') {
+            const now = Date.now();
+            const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
+            let btcPerHourTotal = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0) : 0;
+            const minedBtc = hoursPassed * btcPerHourTotal;
+
+            if (minedBtc <= 0) return i.reply({ content: '❌ Nincs begyűjthető Bitcoin!', ephemeral: true });
+
+            userDb.btcBalance = (userDb.btcBalance || 0) + minedBtc;
+            userDb.lastBtcClaim = now;
+            await userDb.save();
+
+            return i.reply({ content: `🎉 Sikeresen begyűjtöttél **${formatBtc(minedBtc)}** Bitcoin-t!`, ephemeral: true });
+        }
+
         if (i.customId === 'bj_hit' || i.customId === 'bj_stand') {
             const game = activeBlackjack.get(i.message.id);
-            if (!game) return i.reply({ content: '❌ Ez a játék már véget ért vagy lejárt!', ephemeral: true });
+            if (!game) return i.reply({ content: '❌ Ez a játék már véget ért!', ephemeral: true });
             if (i.user.id !== game.userId) return i.reply({ content: '❌ Ez nem a te kártyapartid! 🤡', ephemeral: true });
-            if (game.gameOver) return i.reply({ content: '❌ Ez a kör már lezárult!', ephemeral: true });
-
-            const uDb = await getUserDb(i.guild.id, i.user.id);
-            if (!uDb.stats) uDb.stats = { blackjack: { played: 0, won: 0, netProfit: 0 }, mines: { played: 0, won: 0, netProfit: 0 } };
 
             if (i.customId === 'bj_hit') {
                 game.playerCards.push(getRandomCard());
@@ -960,9 +1226,9 @@ client.on('interactionCreate', async (i) => {
                     activeBlackjack.delete(i.message.id);
                     await addLossToVault(i.guild.id, game.bet);
 
-                    uDb.stats.blackjack.played += 1;
-                    uDb.stats.blackjack.netProfit -= game.bet;
-                    await uDb.save();
+                    userDb.stats.blackjack.played += 1;
+                    userDb.stats.blackjack.netProfit -= game.bet;
+                    await userDb.save();
 
                     const loseEmbed = new EmbedBuilder()
                         .setColor('#ff0000')
@@ -999,28 +1265,26 @@ client.on('interactionCreate', async (i) => {
                 }
 
                 let resultText = '', embedColor = '#2f3136';
-                uDb.stats.blackjack.played += 1;
+                userDb.stats.blackjack.played += 1;
 
                 if (dealerSum > 21 || playerSum > dealerSum) {
                     embedColor = '#00ff00';
                     const wonAmount = game.bet * 2;
-                    const profit = game.bet;
-                    uDb.balance += wonAmount;
-                    
-                    uDb.stats.blackjack.won += 1;
-                    uDb.stats.blackjack.netProfit += profit;
+                    userDb.balance += wonAmount;
+                    userDb.stats.blackjack.won += 1;
+                    userDb.stats.blackjack.netProfit += game.bet;
                     resultText = `🎉 **NYERTÉL!** Kaptál **${formatFt(wonAmount)}**-ot!`;
                 } else if (playerSum === dealerSum) {
                     embedColor = '#ffd700';
-                    uDb.balance += game.bet;
-                    resultText = `🤝 **DÖNTETLEN (Push)!** Visszakaptad a téted (**${formatFt(game.bet)}**).`;
+                    userDb.balance += game.bet;
+                    resultText = `🤝 **DÖNTETLEN (Push)!** Visszakaptad a téted.`;
                 } else {
                     embedColor = '#ff0000';
-                    uDb.stats.blackjack.netProfit -= game.bet;
+                    userDb.stats.blackjack.netProfit -= game.bet;
                     resultText = `😢 **VESZTETTÉL!** Az osztó nyert.`;
                     await addLossToVault(i.guild.id, game.bet);
                 }
-                await uDb.save();
+                await userDb.save();
 
                 const finalEmbed = new EmbedBuilder()
                     .setColor(embedColor)
@@ -1029,7 +1293,7 @@ client.on('interactionCreate', async (i) => {
                     .addFields(
                         { name: '🧑 Játékos lapjai', value: `\`\`\`css\n${game.playerCards.map(c => c.display).join(' ')} (Összeg: ${playerSum})\`\`\``, inline: false },
                         { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${game.dealerCards.map(c => c.display).join(' ')} (Összeg: ${dealerSum})\`\`\``, inline: false },
-                        { name: '💳 Új egyenleged', value: `\`\`\`${formatFt(uDb.balance)}\`\`\``, inline: true }
+                        { name: '💳 Új egyenleged', value: `\`\`\`${formatFt(userDb.balance)}\`\`\``, inline: true }
                     );
                 return i.update({ embeds: [finalEmbed], components: [] });
             }
@@ -1037,44 +1301,30 @@ client.on('interactionCreate', async (i) => {
 
         if (i.customId.startsWith('mine_tile_')) {
             const game = activeMines.get(i.message.id);
-            if (!game) return i.reply({ content: '❌ Ez a játék már véget ért!', ephemeral: true });
-            if (i.user.id !== game.userId) return i.reply({ content: '❌ Ez nem a te játékod! 🤡', ephemeral: true });
+            if (!game || i.user.id !== game.userId) return i.reply({ content: '❌ Ez nem a te játékod!', ephemeral: true });
 
             const idx = parseInt(i.customId.split('_')[2]);
             if (game.revealed.includes(idx)) return i.deferUpdate();
-
-            const uDb = await getUserDb(i.guild.id, i.user.id);
-            if (!uDb.stats) uDb.stats = { blackjack: { played: 0, won: 0, netProfit: 0 }, mines: { played: 0, won: 0, netProfit: 0 } };
 
             if (game.grid[idx] === '💣') {
                 activeMines.delete(i.message.id);
                 await addLossToVault(i.guild.id, game.bet);
 
-                uDb.stats.mines.played += 1;
-                uDb.stats.mines.netProfit -= game.bet;
-                await uDb.save();
+                userDb.stats.mines.played += 1;
+                userDb.stats.mines.netProfit -= game.bet;
+                await userDb.save();
 
-                const loseEmbed = new EmbedBuilder()
-                    .setColor('#ff0000')
-                    .setTitle('💥 BUMM! AKNÁRA LÉPTÉL!')
-                    .addFields({ name: '💸 ELVESZÍTETT TÉT', value: `\`\`\`${formatFt(game.bet)}\`\`\``, inline: true })
-                    .setDescription('Sajnos bombát találtál, a teljes téted elveszett!');
-                
-                try {
-                    await i.message.reactions.removeAll().catch(() => {});
-                } catch(e) {}
-
+                const loseEmbed = new EmbedBuilder().setColor('#ff0000').setTitle('💥 BUMM! AKNÁRA LÉPTÉL!').addFields({ name: '💸 ELVESZÍTETT TÉT', value: `\`\`\`${formatFt(game.bet)}\`\`\``, inline: true });
                 return i.update({ embeds: [loseEmbed], components: buildMinesComponents(game, true) });
             }
 
             game.revealed.push(idx);
             const currentMult = getMinesMultiplier(25, game.bombs, game.revealed.length);
             const currentWin = Math.floor(game.bet * currentMult);
-            const updateEmbed = createMinesEmbed(game.bet, game.bombs, game.revealed.length, currentMult, currentWin, '💎 GYÉMÁNT TALÁLAT!');
-            return i.update({ embeds: [updateEmbed], components: buildMinesComponents(game, false) });
+            return i.update({ embeds: [createMinesEmbed(game.bet, game.bombs, game.revealed.length, currentMult, currentWin)], components: buildMinesComponents(game, false) });
         }
 
-        if (i.customId === 'claim_fake_nitro') return i.reply({ content: `🎉 **<@${i.user.id}>** bedőlt a kamu Nitrónak és át lett verve! 🤡`, ephemeral: false });
+        if (i.customId === 'claim_fake_nitro') return i.reply({ content: `🎉 **<@${i.user.id}>** bedőlt a kamu Nitrónak! 🤡` });
 
         if (i.customId === 'open_ticket') {
             const name = `ticket-${i.user.username}`;
@@ -1106,6 +1356,69 @@ client.on('interactionCreate', async (i) => {
                 await logCh.send({ embeds: [new EmbedBuilder().setTitle('📝 Ticket Lezárva').setColor('#e74c3c').addFields({ name: 'Neve', value: i.channel.name }, { name: 'Lezárta', value: i.user.tag })], files: [file] });
                 setTimeout(() => i.channel.delete().catch(() => {}), 3000);
             } catch (e) { i.editReply({ content: '❌ Hiba történt!' }); }
+        }
+    }
+
+    if (i.isStringSelectMenu()) {
+        const userDb = await getUserDb(i.guild.id, i.user.id);
+
+        if (i.customId === 'select_gpu_rarity') {
+            const rarity = i.values[0];
+            const filteredGpus = Object.values(GPUS).filter(g => g.rarity === rarity);
+
+            const options = filteredGpus.map(g => ({
+                label: `${g.name} (${formatFt(g.price)})`,
+                value: g.id,
+                description: `Termelés: ${formatBtc(g.btcPerHour)} / óra`
+            }));
+
+            const select = new StringSelectMenuBuilder()
+                .setCustomId('select_buy_gpu')
+                .setPlaceholder('Válassz kártyát a megvásárláshoz...')
+                .addOptions(options);
+
+            const row1 = new ActionRowBuilder().addComponents(select);
+            const row2 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('miner_menu_gpus').setLabel('◀️ Vissza a kategóriákhoz').setStyle(ButtonStyle.Secondary)
+            );
+
+            return i.update({ embeds: [new EmbedBuilder().setColor('#f7931a').setTitle(`🖥️ ${rarity.toUpperCase()} KÁRTYÁK`).setDescription('Válaszd ki a megvásárolni kívánt modellt!')], components: [row1, row2] });
+        }
+
+        if (i.customId === 'select_buy_gpu') {
+            const gpuId = i.values[0];
+            const gpu = GPUS[gpuId];
+            const roomInfo = ROOMS[userDb.roomType || 'alagsor'];
+            const currentGpuCount = userDb.rigs ? userDb.rigs.length : 0;
+
+            if (currentGpuCount >= roomInfo.maxGpus) {
+                return i.reply({ content: `❌ A helyiséged megtelt (**${currentGpuCount}/${roomInfo.maxGpus}**)! Előbb bővítsd a szervertermedet.`, ephemeral: true });
+            }
+
+            if (userDb.balance < gpu.price) {
+                return i.reply({ content: `❌ Nincs elég pénzed erre a kártyára! (Ára: ${formatFt(gpu.price)})`, ephemeral: true });
+            }
+
+            userDb.balance -= gpu.price;
+            userDb.rigs.push({ gpuId: gpu.id, name: gpu.name, btcPerHour: gpu.btcPerHour });
+            await userDb.save();
+
+            return i.reply({ content: `🎉 Sikeresen megvásároltad a következőt: **${gpu.name}** (**${formatFt(gpu.price)}**)!` });
+        }
+
+        if (i.customId === 'select_buy_room') {
+            const targetRoomKey = i.values[0];
+            const targetRoom = ROOMS[targetRoomKey];
+
+            if (userDb.balance < targetRoom.price) {
+                return i.reply({ content: `❌ Nincs elég pénzed erre a bővítésre! (Ára: ${formatFt(targetRoom.price)})`, ephemeral: true });
+            }
+
+            userDb.balance -= targetRoom.price;
+            userDb.roomType = targetRoomKey;
+            await userDb.save();
+
+            return i.reply({ content: `🏢 Sikeresen megvásároltad a következőt: **${targetRoom.name}**! Új kapacitásod: **${targetRoom.maxGpus} db videokártya**.` });
         }
     }
 });
