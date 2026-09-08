@@ -7,12 +7,15 @@ const ms = require('ms');
 
 // --- BEÁLLÍTÁSOK ---
 const CONFIG = {
+    GUILD_ID: '1527688497048326154',        // Szerver ID (Azonnali parancsfrissítéshez)
     DEFAULT_PARENT: '1527688497593585746', 
     SORSOLAS_PARENTS: ['1534568444974862506', '1534631388211445891'],
     PARTNER_PARENTS: ['1534568268956827758'],
     REMINDER_CHANNEL: '1546794386581356584',
     REMINDER_ROLE: '1546794488372924476',
-    BOOSTER_ROLE: '1449473778386997311'
+    BOOSTER_ROLE: '1449473778386997311',    // Booster rang ID
+    MEMBER_ROLE: '1486847637134246139',     // Tag rang ID
+    STAFF_ROLE: '1436671411178569832'       // * rang ID (Admin/Személyzet)
 };
 
 // --- ADATBÁZIS & MODELLEK ---
@@ -268,7 +271,7 @@ const commands = [
         .addSubcommand(s => s.setName('sima').setDescription('Vissza az alapértelmezett kategóriába')),
     new SlashCommandBuilder().setName('invites').setDescription('Meghívók lekérése').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
     
-    // GAZDASÁGI & MINES PARANCSOK (MINDENKINEK ELÉRHETŐ)
+    // GAZDASÁGI & MINES PARANCSOK
     new SlashCommandBuilder().setName('treasure').setDescription('Ingyen Forint kikérése (Boostereknek 7 perc, másnak 10 perc)'),
     new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Kinek az egyenlege?')),
     new SlashCommandBuilder().setName('utalas').setDescription('Pénz küldése másnak').addUserOption(o => o.setName('user').setDescription('Kinek?').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('Összeg (Ft)').setRequired(true).setMinValue(1)),
@@ -288,7 +291,9 @@ const commands = [
 
 client.once('ready', async () => {
     console.log(`Sikeresen elindult: ${client.user.tag}`);
-    await new REST({ version: '10' }).setToken(process.env.TOKEN).put(Routes.applicationCommands(client.user.id), { body: commands });
+    
+    // GUILD SPECIFIKUS REGISZTRÁCIÓ (AZONNALI FRISSÍTÉS)
+    await new REST({ version: '10' }).setToken(process.env.TOKEN).put(Routes.applicationGuildCommands(client.user.id, CONFIG.GUILD_ID), { body: commands });
     updateStatus(client.guilds.cache.first());
 
     const active = await Giveaway.find({ ended: false });
@@ -325,7 +330,8 @@ client.on('messageCreate', async (m) => {
 
     if (['.sorsolas', '.partner', '.sima'].includes(cmd)) {
         await m.delete().catch(() => {});
-        if (!m.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+        // CSAKIS A * RANGOSOK TUDJÁK HASZNÁLNI
+        if (!m.member?.roles?.cache?.has(CONFIG.STAFF_ROLE)) {
             const r = await m.channel.send('❌ Nincs jogosultságod!');
             return setTimeout(() => r.delete().catch(() => {}), 3000);
         }
@@ -345,6 +351,21 @@ client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton()) return;
 
     if (i.isChatInputCommand()) {
+        const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE);
+        const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
+
+        const allowedForMembers = ['mines', 'iq', 'meret', 'treasure', 'bal', 'utalas', 'top', 'invites'];
+
+        // HA NEM TAG ÉS NEM STAFF -> SEMMILYEN PARANCSOT NEM HASZNÁLHAT
+        if (!isMember) {
+            return i.reply({ content: '❌ Nincs meg a szükséges rangod a parancsok használatához!', ephemeral: true });
+        }
+
+        // HA CSAL TAG, DE OLYAN PARANCSOT PRÓBÁL AKI CSAK STAFF -> ELUTASÍTÁS
+        if (!allowedForMembers.includes(i.commandName) && !isStaff) {
+            return i.reply({ content: '❌ Ez a parancs kizárólag a kijelölt rangosoknak érhető el!', ephemeral: true });
+        }
+
         const userDb = await getUserDb(i.guild.id, i.user.id);
 
         // 1 PERCES COOLDOWN (/meret ÉS /iq PARANCSOKRA)
@@ -360,7 +381,7 @@ client.on('interactionCreate', async (i) => {
             commandCooldowns.set(cooldownKey, Date.now());
         }
 
-        // --- TREASURE (MINDENKI) ---
+        // --- TREASURE ---
         if (i.commandName === 'treasure') {
             const now = Date.now();
             const isBooster = i.member?.roles?.cache?.has(CONFIG.BOOSTER_ROLE);
@@ -385,14 +406,14 @@ client.on('interactionCreate', async (i) => {
             }
         }
 
-        // --- BAL / EGYENLEG (MINDENKI) ---
+        // --- BAL / EGYENLEG ---
         if (i.commandName === 'bal') {
             const target = i.options.getUser('user') || i.user;
             const targetDb = await getUserDb(i.guild.id, target.id);
             return i.reply({ content: `💳 **${target.username}** egyenlege: **${formatFt(targetDb.balance)}**` });
         }
 
-        // --- UTALÁS (MINDENKI) ---
+        // --- UTALÁS ---
         if (i.commandName === 'utalas') {
             const target = i.options.getUser('user');
             const amount = i.options.getInteger('amount');
@@ -408,7 +429,7 @@ client.on('interactionCreate', async (i) => {
             return i.reply({ content: `💸 Sikeresen átutaltál **${formatFt(amount)}**-ot <@${target.id}> felhasználónak!` });
         }
 
-        // --- TOPLISTA (MINDENKI) ---
+        // --- TOPLISTA ---
         if (i.commandName === 'top') {
             const topUsers = await User.find({ guildId: i.guild.id }).sort({ balance: -1 }).limit(10);
             let desc = "";
@@ -417,7 +438,7 @@ client.on('interactionCreate', async (i) => {
             return i.reply({ embeds: [embed] });
         }
 
-        // --- MINES INDÍTÁS (MINDENKI) ---
+        // --- MINES INDÍTÁS ---
         if (i.commandName === 'mines') {
             const bet = i.options.getInteger('bet');
             const bombs = i.options.getInteger('bombs');
@@ -463,12 +484,8 @@ client.on('interactionCreate', async (i) => {
             return;
         }
 
-        // RANGHOZ KÖTÖTT TROLL PARANCSOK (CSAK ADMIN / MODERÁTOR HASZNÁLHATJA)
+        // STAFF PARANCSOK (CSAK A * RANGOSOKNAK)
         if (['fakeban', 'nitro', 'mock', 'roulette', 'roast', 'rate'].includes(i.commandName)) {
-            if (!i.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
-                return i.reply({ content: '❌ Nincs jogosultságod ennek a parancsnak a használatához!', ephemeral: true });
-            }
-
             await i.deferReply({ ephemeral: true });
 
             if (i.commandName === 'fakeban') {
@@ -520,11 +537,10 @@ client.on('interactionCreate', async (i) => {
             return i.reply({ content: `📩 **${user.username}** eddig **${data ? data.invites : 0}** embert hívott meg!`, ephemeral: false });
         }
 
-        // TICKET
+        // TICKET (CSAK STAFF)
         if (i.commandName === 'ticket') {
             const sub = i.options.getSubcommand();
             if (sub === 'setup') {
-                if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: '❌ Nincs jogod!', ephemeral: true });
                 const embed = new EmbedBuilder().setColor('#00f2fe').setTitle('🎫 Ticket Nyitása').setDescription('Kattints az alábbi gombra privát csatorna nyitásához!');
                 const btn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('open_ticket').setLabel('📩 Ticket Nyitása').setStyle(ButtonStyle.Primary));
                 await i.channel.send({ embeds: [embed], components: [btn] });
@@ -532,7 +548,6 @@ client.on('interactionCreate', async (i) => {
             }
 
             if (['sorsolas', 'partner', 'sima'].includes(sub)) {
-                if (!i.member.permissions.has(PermissionFlagsBits.ManageChannels)) return i.reply({ content: '❌ Nincs jogosultságod!', ephemeral: true });
                 try {
                     const res = await moveTicketCategory(i.channel, i.guild, sub);
                     return i.reply({ content: `✅ Ticket áthelyezve ide: **${res.categoryName}**!`, ephemeral: true });
@@ -542,9 +557,8 @@ client.on('interactionCreate', async (i) => {
             }
         }
 
-        // GIVEAWAY
+        // GIVEAWAY (CSAK STAFF)
         if (i.commandName === 'giveaway') {
-            if (!i.member.permissions.has(PermissionFlagsBits.ManageChannels)) return i.reply({ content: '❌ Nincs jogosultságod!', ephemeral: true });
             const sub = i.options.getSubcommand();
 
             if (sub === 'start') {
@@ -695,7 +709,7 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.customId === 'close_ticket') {
-            if (!i.member.permissions.has(PermissionFlagsBits.ManageChannels)) return i.reply({ content: '❌ Nincs jogod!', ephemeral: true });
+            if (!i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE)) return i.reply({ content: '❌ Nincs jogod!', ephemeral: true });
             await i.reply({ content: '🔒 Ticket lezárása...' });
             try {
                 const msgs = await i.channel.messages.fetch({ limit: 100 });
