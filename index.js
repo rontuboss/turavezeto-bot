@@ -163,11 +163,9 @@ function getMinesMultiplier(totalTiles, bombs, revealed) {
     return Math.max(1.01, mult);
 }
 
-function buildMinesComponents(game, gameOver = false, won = false) {
+function buildMinesComponents(game, gameOver = false) {
     const rows = [];
-    
-    // Az első 4 sor (teljes 5-ös sorok: 0-19 indexek)
-    for (let r = 0; r < 4; r++) {
+    for (let r = 0; r < 5; r++) {
         const row = new ActionRowBuilder();
         for (let c = 0; c < 5; c++) {
             const idx = r * 5 + c;
@@ -188,39 +186,6 @@ function buildMinesComponents(game, gameOver = false, won = false) {
         }
         rows.push(row);
     }
-
-    // Az 5. sor: 4 db gyémánt gomb (20, 21, 22, 23) + 1 db Kifizetés gomb
-    const lastRow = new ActionRowBuilder();
-    for (let c = 0; c < 4; c++) {
-        const idx = 20 + c;
-        const btn = new ButtonBuilder().setCustomId(`mine_tile_${idx}`);
-        if (gameOver) {
-            btn.setDisabled(true);
-            if (game.grid[idx] === '💣') btn.setLabel('💣').setStyle(ButtonStyle.Danger);
-            else if (game.revealed.includes(idx)) btn.setLabel('💎').setStyle(ButtonStyle.Success);
-            else btn.setLabel('💎').setStyle(ButtonStyle.Secondary);
-        } else {
-            if (game.revealed.includes(idx)) {
-                btn.setLabel('💎').setStyle(ButtonStyle.Success).setDisabled(true);
-            } else {
-                btn.setLabel('❓').setStyle(ButtonStyle.Secondary);
-            }
-        }
-        lastRow.addComponents(btn);
-    }
-
-    const currentMult = getMinesMultiplier(24, game.bombs, game.revealed.length); // 24 mező a rácsban + 1 kifizetés gomb
-    const winAmount = Math.floor(game.bet * currentMult);
-
-    const cashoutBtn = new ButtonBuilder()
-        .setCustomId('mine_cashout')
-        .setLabel(`💰 KIFIZETÉS`)
-        .setStyle(ButtonStyle.Success)
-        .setDisabled(game.revealed.length === 0 || gameOver);
-        
-    lastRow.addComponents(cashoutBtn);
-    rows.push(lastRow);
-
     return rows;
 }
 
@@ -599,35 +564,34 @@ client.on('interactionCreate', async (i) => {
         if (i.commandName === 'mines') {
             await i.deferReply();
 
-            try {
-                const bet = i.options.getInteger('bet');
-                const bombs = i.options.getInteger('bombs');
+            const bet = i.options.getInteger('bet');
+            const bombs = i.options.getInteger('bombs');
+            if (userDb.balance < bet) return i.editReply({ content: '❌ Nincs elég egyenleged a játék elindításához!' });
 
-                if (userDb.balance < bet) {
-                    return i.editReply({ content: '❌ Nincs elég egyenleged a játék elindításához!' });
-                }
+            userDb.balance -= bet;
+            await userDb.save();
 
-                userDb.balance -= bet;
-                await userDb.save();
-
-                const grid = Array(25).fill('💎');
-                let placed = 0;
-                while (placed < bombs) {
-                    const rand = Math.floor(Math.random() * 25);
-                    if (grid[rand] !== '💣') { grid[rand] = '💣'; placed++; }
-                }
-
-                const game = { userId: i.user.id, bet, bombs, grid, revealed: [] };
-                const embed = createMinesEmbed(bet, bombs, 0, 1.00, bet);
-                const rows = buildMinesComponents(game);
-
-                const msg = await i.editReply({ embeds: [embed], components: rows });
-                game.msgId = msg.id;
-        activeMines.set(msg.id, game);
-            } catch (error) {
-                console.error('Hiba a /mines parancsban:', error);
-                await i.editReply({ content: `❌ Hiba történt a játék indításakor: \`${error.message}\`` }).catch(() => {});
+            const grid = Array(25).fill('💎');
+            let placed = 0;
+            while (placed < bombs) {
+                const rand = Math.floor(Math.random() * 25);
+                if (grid[rand] !== '💣') { grid[rand] = '💣'; placed++; }
             }
+
+            const game = { userId: i.user.id, bet, bombs, grid, revealed: [] };
+            const embed = createMinesEmbed(bet, bombs, 0, 1.00, bet);
+            const rows = buildMinesComponents(game);
+
+            const msg = await i.editReply({ embeds: [embed], components: rows });
+            game.msgId = msg.id;
+
+            const cashoutRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`mine_cashout_${msg.id}`).setLabel('💰 KIFIZETÉS').setStyle(ButtonStyle.Success)
+            );
+            const controlMsg = await i.channel.send({ content: `👇 **Kifizetés gomb a(z) <@${i.user.id}> játékához:**`, components: [cashoutRow] });
+            game.controlMsgId = controlMsg.id;
+
+            activeMines.set(msg.id, game);
             return;
         }
 
@@ -786,8 +750,6 @@ client.on('interactionCreate', async (i) => {
                 if (playerSum > 21) {
                     game.gameOver = true;
                     activeBlackjack.delete(i.message.id);
-                    
-                    // Blackjack veszteség hozzáadása a kaszinó vault felhasználóhoz
                     await addLossToVault(i.guild.id, game.bet);
 
                     const loseEmbed = new EmbedBuilder()
@@ -806,7 +768,7 @@ client.on('interactionCreate', async (i) => {
                     .setTitle('♠️ KASZINÓ BLACKJACK ASZTAL ♣️')
                     .addFields(
                         { name: '🧑 Játékos lapjai', value: `\`\`\`css\n${game.playerCards.map(c => c.display).join(' ')} (Összeg: ${playerSum})\`\`\``, inline: false },
-                        { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${game.dealerCards[0].display} 🎴 (Rejtett)\`\`\``, inline: false },
+                        { name: '🤖 Osztó lapjai', value: `\`\`\`css\n${dealerCards[0].display} 🎴 (Rejtett)\`\`\``, inline: false },
                         { name: '💵 Tét', value: `\`\`\`${formatFt(game.bet)}\`\`\``, inline: true }
                     );
                 return i.update({ embeds: [embed] });
@@ -838,7 +800,6 @@ client.on('interactionCreate', async (i) => {
                 } else {
                     embedColor = '#ff0000';
                     resultText = `😢 **VESZTETTÉL!** Az osztó nyert.`;
-                    // Blackjack veszteség hozzáadása a kaszinó vault felhasználóhoz
                     await addLossToVault(i.guild.id, game.bet);
                 }
                 await uDb.save();
@@ -857,17 +818,19 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.customId.startsWith('mine_')) {
-            const game = activeMines.get(i.message.id);
+            const gameId = i.customId.startsWith('mine_cashout_') ? i.customId.replace('mine_cashout_', '') : null;
+            const game = gameId ? activeMines.get(gameId) : Array.from(activeMines.values()).find(g => g.userId === i.user.id);
+
             if (!game) return i.reply({ content: '❌ Ez a játék már véget ért!', ephemeral: true });
             if (i.user.id !== game.userId) return i.reply({ content: '❌ Ez nem a te játékod! 🤡', ephemeral: true });
 
-            if (i.customId === 'mine_cashout') {
+            if (i.customId.startsWith('mine_cashout')) {
                 const currentMult = getMinesMultiplier(25, game.bombs, game.revealed.length);
                 const winAmount = Math.floor(game.bet * currentMult);
                 const uDb = await getUserDb(i.guild.id, i.user.id);
                 uDb.balance += winAmount;
                 await uDb.save();
-                activeMines.delete(i.message.id);
+                activeMines.delete(game.msgId);
 
                 const endEmbed = new EmbedBuilder()
                     .setColor('#00ff00')
@@ -878,7 +841,17 @@ client.on('interactionCreate', async (i) => {
                         { name: '💳 ÚJ EGYENLEGED', value: `\`\`\`${formatFt(uDb.balance)}\`\`\``, inline: false }
                     )
                     .setDescription('Sikeresen kiszálltál a játékból!');
-                return i.update({ embeds: [endEmbed], components: buildMinesComponents(game, true, true) });
+                
+                try {
+                    const msg = await i.channel.messages.fetch(game.msgId).catch(() => null);
+                    if (msg) await msg.edit({ embeds: [endEmbed], components: buildMinesComponents(game, true) });
+                } catch(e) {}
+                try {
+                    const controlMsg = await i.channel.messages.fetch(game.controlMsgId).catch(() => null);
+                    if (controlMsg) await controlMsg.delete().catch(() => {});
+                } catch(e) {}
+
+                return i.deferUpdate();
             }
 
             if (i.customId.startsWith('mine_tile_')) {
@@ -886,9 +859,7 @@ client.on('interactionCreate', async (i) => {
                 if (game.revealed.includes(idx)) return i.deferUpdate();
 
                 if (game.grid[idx] === '💣') {
-                    activeMines.delete(i.message.id);
-                    
-                    // Mines veszteség hozzáadása a kaszinó vault felhasználóhoz
+                    activeMines.delete(game.msgId);
                     await addLossToVault(i.guild.id, game.bet);
 
                     const loseEmbed = new EmbedBuilder()
@@ -896,14 +867,20 @@ client.on('interactionCreate', async (i) => {
                         .setTitle('💥 BUMM! AKNÁRA LÉPTÉL!')
                         .addFields({ name: '💸 ELVESZÍTETT TÉT', value: `\`\`\`${formatFt(game.bet)}\`\`\``, inline: true })
                         .setDescription('Sajnos bombát találtál, a teljes téted elveszett!');
-                    return i.update({ embeds: [loseEmbed], components: buildMinesComponents(game, true, false) });
+                    
+                    try {
+                        const controlMsg = await i.channel.messages.fetch(game.controlMsgId).catch(() => null);
+                        if (controlMsg) await controlMsg.delete().catch(() => {});
+                    } catch(e) {}
+
+                    return i.update({ embeds: [loseEmbed], components: buildMinesComponents(game, true) });
                 }
 
                 game.revealed.push(idx);
                 const currentMult = getMinesMultiplier(25, game.bombs, game.revealed.length);
                 const currentWin = Math.floor(game.bet * currentMult);
                 const updateEmbed = createMinesEmbed(game.bet, game.bombs, game.revealed.length, currentMult, currentWin, '💎 GYÉMÁNT TALÁLAT!');
-                return i.update({ embeds: [updateEmbed], components: buildMinesComponents(game, false, false) });
+                return i.update({ embeds: [updateEmbed], components: buildMinesComponents(game, false) });
             }
         }
 
