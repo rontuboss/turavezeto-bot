@@ -497,6 +497,7 @@ setInterval(async () => {
                 }
             }
 
+            // MEGHIBÁSODÁSOK LEKEZELÉSE (MEGŐRZI A MEGKERESETT BTC-T)
             const users = await User.find({ "rigs.0": { $exists: true }, isBroken: false });
             for (const u of users) {
                 const room = ROOMS[u.roomType || 'alagsor'];
@@ -504,12 +505,26 @@ setInterval(async () => {
                 const finalFailChance = Math.max(0.005, room.failChance - cooler.failReduce);
 
                 if (Math.random() < finalFailChance) {
+                    const now = Date.now();
+                    const hoursPassed = Math.max(0, (now - (u.lastBtcClaim || now)) / (1000 * 60 * 60));
+                    
+                    let rawBtc = u.rigs ? u.rigs.reduce((sum, r) => sum + (r.btcPerHour || 0), 0) : 0;
+                    let btcPerHourTotal = rawBtc * room.multiplier;
+                    const accruedBtc = hoursPassed * btcPerHourTotal;
+
                     u.isBroken = true;
-                    u.brokenAt = Date.now();
+                    u.brokenAt = now;
+                    u.lastBtcClaim = now; // Megállítja az órát a hiba pillanatában
+
+                    if (accruedBtc > 0) {
+                        u.btcBalance = (u.btcBalance || 0) + accruedBtc;
+                        u.totalMinedBtc = (u.totalMinedBtc || 0) + accruedBtc;
+                    }
+
                     await u.save();
                     
                     const ch = client.channels.cache.get(CONFIG.MINER_CHANNEL);
-                    if (ch) ch.send(`⚡ 🚨 **TÚLMELEGEDÉS!** <@${u.userId}> szerverterme leállt! Használd a \`/crypto szerviz\` parancsot!`).catch(() => {});
+                    if (ch) ch.send(`⚡ 🚨 **TÚLMELEGEDÉS!** <@${u.userId}> szerverterme leállt! Az eddigi termelésed (**${formatBtc(accruedBtc)}**) elmentésre került. Használd a \`/crypto szerviz\` parancsot!`).catch(() => {});
                 }
             }
         } catch (e) { console.error(e); }
@@ -556,8 +571,14 @@ const commands = [
         .addUserOption(o => o.setName('user').setDescription('Felhasználó'))
         .addNumberOption(o => o.setName('osszeg').setDescription('Összeg'))
         .addBooleanOption(o => o.setName('global').setDescription('Globális-e')),
-    new SlashCommandBuilder().setName('addbalance').setDescription('Pénz adása (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
-        .addNumberOption(o => o.setName('osszeg').setDescription('Összeg').setRequired(true))
+    
+    // 🔥 UTALÁS / JÓVÁÍRÁS BŐVÍTÉSE: PÉNZNEM OPCIÓ
+    new SlashCommandBuilder().setName('addbalance').setDescription('Pénz vagy BTC adása (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
+        .addNumberOption(o => o.setName('osszeg').setDescription('Összeg (Ft vagy BTC)').setRequired(true))
+        .addStringOption(o => o.setName('currency').setDescription('Pénznem kiválasztása').addChoices(
+            { name: '💵 Cash (Ft)', value: 'ft' },
+            { name: '🪙 Bitcoin (BTC)', value: 'btc' }
+        ))
         .addUserOption(o => o.setName('user').setDescription('Felhasználó'))
         .addBooleanOption(o => o.setName('global').setDescription('Globális-e')),
 
@@ -643,7 +664,6 @@ client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.guild) return;
     const cmd = m.content.toLowerCase().trim();
 
-    // 🛠️ KARBANTARTÁS MÓD (KIZÁRÓLAG A TE DISCORD ID-D HASZNÁLHATJA: 1127950309247942797)
     if (cmd === '.maintenance') {
         if (m.author.id !== CONFIG.FIXED_USER_ID) {
             return m.reply('❌ Nincs jogosultságod a karbantartás mód használatához! Kizárólag a bot tulajdonosa indíthatja el.').catch(() => {});
@@ -745,9 +765,6 @@ client.on('interactionCreate', async (i) => {
             userDb.stats = { blackjack: { played: 0, won: 0, netProfit: 0 }, mines: { played: 0, won: 0, netProfit: 0 } };
         }
 
-        // ==========================================
-        // 📈 /BTC PARANCSOK
-        // ==========================================
         if (i.commandName === 'btc') {
             const sub = i.options.getSubcommand();
 
@@ -799,9 +816,6 @@ client.on('interactionCreate', async (i) => {
             }
         }
 
-        // ==========================================
-        // 🛒 /MINER BOLT
-        // ==========================================
         if (i.commandName === 'miner') {
             const sub = i.options.getSubcommand();
             if (sub === 'bolt') {
@@ -825,9 +839,6 @@ client.on('interactionCreate', async (i) => {
             }
         }
 
-        // ==========================================
-        // ⚡ /CRYPTO PARANCSOK
-        // ==========================================
         if (i.commandName === 'crypto') {
             const sub = i.options.getSubcommand();
 
@@ -948,16 +959,17 @@ client.on('interactionCreate', async (i) => {
                 return i.reply({ embeds: [embed], components: [row], ephemeral: true });
             }
 
+            // 🔧 SZERVIZ MODIFIKÁCIÓ: 30 PERCES JAVÍTÁSI IDŐ
             if (sub === 'szerviz') {
                 if (!userDb.isBroken) return i.reply({ content: '✅ A szervertermednek semmi baja!', ephemeral: true });
                 if (userDb.repairUntil > Date.now()) return i.reply({ content: '⏳ A szerelés már folyamatban van!', ephemeral: true });
                 if (userDb.balance < 100000) return i.reply({ content: '❌ Nincs elég pénzed a szervizre! (Ára: 100 000 Ft)', ephemeral: true });
 
                 userDb.balance -= 100000;
-                userDb.repairUntil = Date.now() + (60 * 60 * 1000);
+                userDb.repairUntil = Date.now() + (30 * 60 * 1000); // 30 PERC JAVÍTÁSI IDŐ
                 await userDb.save();
 
-                return i.reply({ content: '🔧 **Szerviz elindítva!** A szerverterem **1 óra múlva** újra működni fog!', ephemeral: true });
+                return i.reply({ content: '🔧 **Szerviz elindítva!** A szerverterem **30 perc múlva** újra működni fog!', ephemeral: true });
             }
         }
 
@@ -1016,23 +1028,39 @@ client.on('interactionCreate', async (i) => {
             }
         }
 
+        // 💵/🪙 /ADDBALANCE MODIFIKÁCIÓ (PÉNZNEM OPCIÓ)
         if (i.commandName === 'addbalance') {
             if (!isStaff) return i.reply({ content: '❌ Nincs jogosultságod ehhez a parancshoz!', ephemeral: true });
 
             const addAmount = i.options.getNumber('osszeg');
+            const currency = i.options.getString('currency') || 'ft'; // Alapértelmezett Ft
             const isGlobal = i.options.getBoolean('global') || false;
             const targetUser = i.options.getUser('user');
 
-            if (isGlobal) {
-                const result = await User.updateMany({ guildId: i.guild.id }, { $inc: { balance: addAmount } });
-                return i.reply({ content: `🌐 🎁 **GLOBÁLIS PÉNZOSZTÁS!** Minden regisztrált felhasználó (${result.modifiedCount} fő) kapott **${formatFt(addAmount)}**-ot az egyenlegére! 🎉` });
-            } else {
-                if (!targetUser) return i.reply({ content: '❌ Kérlek adj meg egy felhasználót, vagy válaszd a `global: Igaz` opciót!', ephemeral: true });
+            if (currency === 'btc') {
+                if (isGlobal) {
+                    const result = await User.updateMany({ guildId: i.guild.id }, { $inc: { btcBalance: addAmount } });
+                    return i.reply({ content: `🌐 🎁 **GLOBÁLIS BITCOIN OSZTÁS!** Minden felhasználó (${result.modifiedCount} fő) kapott **${formatBtc(addAmount)}**-t a tárcájába! 🪙` });
+                } else {
+                    if (!targetUser) return i.reply({ content: '❌ Kérlek adj meg egy felhasználót, vagy válaszd a `global: Igaz` opciót!', ephemeral: true });
 
-                const targetDb = await getUserDb(i.guild.id, targetUser.id);
-                targetDb.balance += addAmount;
-                await targetDb.save();
-                return i.reply({ content: `✅ **Sikeres jóváírás!** Hozzáadtál **${formatFt(addAmount)}**-ot <@${targetUser.id}> számlájához!\n• Új egyenlege: **${formatFt(targetDb.balance)}**` });
+                    const targetDb = await getUserDb(i.guild.id, targetUser.id);
+                    targetDb.btcBalance = (targetDb.btcBalance || 0) + addAmount;
+                    await targetDb.save();
+                    return i.reply({ content: `✅ **Sikeres BTC jóváírás!** Hozzáadtál **${formatBtc(addAmount)}**-t <@${targetUser.id}> tárcájához!\n• Új BTC egyenleg: **${formatBtc(targetDb.btcBalance)}**` });
+                }
+            } else {
+                if (isGlobal) {
+                    const result = await User.updateMany({ guildId: i.guild.id }, { $inc: { balance: addAmount } });
+                    return i.reply({ content: `🌐 🎁 **GLOBÁLIS PÉNZOSZTÁS!** Minden regisztrált felhasználó (${result.modifiedCount} fő) kapott **${formatFt(addAmount)}**-ot az egyenlegére! 🎉` });
+                } else {
+                    if (!targetUser) return i.reply({ content: '❌ Kérlek adj meg egy felhasználót, vagy válaszd a `global: Igaz` opciót!', ephemeral: true });
+
+                    const targetDb = await getUserDb(i.guild.id, targetUser.id);
+                    targetDb.balance += addAmount;
+                    await targetDb.save();
+                    return i.reply({ content: `✅ **Sikeres jóváírás!** Hozzáadtál **${formatFt(addAmount)}**-ot <@${targetUser.id}> számlájához!\n• Új egyenlege: **${formatFt(targetDb.balance)}**` });
+                }
             }
         }
 
