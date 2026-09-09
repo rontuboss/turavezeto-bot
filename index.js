@@ -523,9 +523,19 @@ const commands = [
     new SlashCommandBuilder().setName('removeloan').setDescription('Hitel törlése egy felhasználóról (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addUserOption(o => o.setName('user').setDescription('Kinek a hitelét töröljük?').setRequired(true))
         .addIntegerOption(o => o.setName('osszeg').setDescription('Törlendő összeg (Ha üres, a teljes hitelt törli)')),
-    new SlashCommandBuilder().setName('removebalance').setDescription('Pénz levonása / törlése egy felhasználótól (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
-        .addUserOption(o => o.setName('user').setDescription('Kinek a számlájáról vonjunk le pénzt?').setRequired(true))
-        .addNumberOption(o => o.setName('osszeg').setDescription('Levonandó összeg (Ha üres, teljes egyenleg törlése/nullázása)')),
+    
+    // REMOVEBALANCE (EGYÉNI ÉS GLOBÁLIS)
+    new SlashCommandBuilder().setName('removebalance').setDescription('Pénz levonása / nullázása egyénileg vagy MINDENKITŐL (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
+        .addUserOption(o => o.setName('user').setDescription('Kinek a számlájáról vonjunk le pénzt? (Egyéni levonáshoz)'))
+        .addNumberOption(o => o.setName('osszeg').setDescription('Levonandó összeg (Ha üres, a teljes egyenleget nullázza)'))
+        .addBooleanOption(o => o.setName('global').setDescription('Igaz esetén GLOBÁLISAN MINDENKITŐL levonja/nullázza!')),
+
+    // ADDBALANCE (EGYÉNI ÉS GLOBÁLIS)
+    new SlashCommandBuilder().setName('addbalance').setDescription('Pénz adása egyénileg vagy GLOBÁLISAN mindenkinek (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
+        .addNumberOption(o => o.setName('osszeg').setDescription('Jóváírandó összeg').setRequired(true))
+        .addUserOption(o => o.setName('user').setDescription('Kinek adjunk pénzt? (Egyéni adáshoz)'))
+        .addBooleanOption(o => o.setName('global').setDescription('Igaz esetén GLOBÁLISAN MINDENKI megkapja a pénzt!')),
+
     new SlashCommandBuilder().setName('fakeban').setDescription('Troll kamu kitiltás').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addUserOption(o => o.setName('user').setDescription('Felhasználó').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('Indok')),
     new SlashCommandBuilder().setName('nitro').setDescription('Ingyen Discord Nitro ajándék (kamu)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false),
     new SlashCommandBuilder().setName('mock').setDescription('Spongyabob gúnyolódó szöveg').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addStringOption(o => o.setName('text').setDescription('A szöveg').setRequired(true)),
@@ -915,22 +925,61 @@ client.on('interactionCreate', async (i) => {
             }
         }
 
+        // ==========================================
+        // 💸 /REMOVEBALANCE & /ADDBALANCE LOGIKA
+        // ==========================================
         if (i.commandName === 'removebalance') {
             if (!isStaff) return i.reply({ content: '❌ Nincs jogosultságod ehhez a parancshoz!', ephemeral: true });
 
-            const targetUser = i.options.getUser('user');
+            const isGlobal = i.options.getBoolean('global') || false;
             const removeAmount = i.options.getNumber('osszeg');
-            const targetDb = await getUserDb(i.guild.id, targetUser.id);
+            const targetUser = i.options.getUser('user');
 
-            if (!removeAmount || removeAmount >= targetDb.balance) {
-                const oldBal = targetDb.balance;
-                targetDb.balance = 0;
-                await targetDb.save();
-                return i.reply({ content: `✅ **Egyenleg nullázva!** <@${targetUser.id}> teljes vagyonát (**${formatFt(oldBal)}**) levontad!` });
+            if (isGlobal) {
+                if (!removeAmount) {
+                    // GLOBÁLIS TELJES NULLÁZÁS
+                    const result = await User.updateMany({ guildId: i.guild.id }, { $set: { balance: 0 } });
+                    return i.reply({ content: `🌐 🧹 **GLOBÁLIS ADATBÁZIS RESET!** Az összes regisztrált felhasználó (${result.modifiedCount} fő) egyenlege **0 Ft**-ra lett állítva!` });
+                } else {
+                    // GLOBÁLIS LEVONÁS
+                    const result = await User.updateMany({ guildId: i.guild.id }, { $inc: { balance: -removeAmount } });
+                    return i.reply({ content: `🌐 💸 **GLOBÁLIS LEVONÁS!** Levontál **${formatFt(removeAmount)}**-ot az összes felhasználó számlájáról (${result.modifiedCount} fő)!` });
+                }
             } else {
-                targetDb.balance -= removeAmount;
+                if (!targetUser) return i.reply({ content: '❌ Kérlek adj meg egy felhasználót, vagy válaszd a `global: Igaz` opciót!', ephemeral: true });
+
+                const targetDb = await getUserDb(i.guild.id, targetUser.id);
+                if (!removeAmount || removeAmount >= targetDb.balance) {
+                    const oldBal = targetDb.balance;
+                    targetDb.balance = 0;
+                    await targetDb.save();
+                    return i.reply({ content: `✅ **Egyenleg nullázva!** <@${targetUser.id}> teljes vagyonát (**${formatFt(oldBal)}**) levontad!` });
+                } else {
+                    targetDb.balance -= removeAmount;
+                    await targetDb.save();
+                    return i.reply({ content: `✅ **Sikeres levonás!** Levontál **${formatFt(removeAmount)}**-ot <@${targetUser.id}> számlájáról!\n• Új egyenlege: **${formatFt(targetDb.balance)}**` });
+                }
+            }
+        }
+
+        if (i.commandName === 'addbalance') {
+            if (!isStaff) return i.reply({ content: '❌ Nincs jogosultságod ehhez a parancshoz!', ephemeral: true });
+
+            const addAmount = i.options.getNumber('osszeg');
+            const isGlobal = i.options.getBoolean('global') || false;
+            const targetUser = i.options.getUser('user');
+
+            if (isGlobal) {
+                // GLOBÁLIS ADÁS
+                const result = await User.updateMany({ guildId: i.guild.id }, { $inc: { balance: addAmount } });
+                return i.reply({ content: `🌐 🎁 **GLOBÁLIS PÉNZOSZTÁS!** Minden regisztrált felhasználó (${result.modifiedCount} fő) kapott **${formatFt(addAmount)}**-ot az egyenlegére! 🎉` });
+            } else {
+                if (!targetUser) return i.reply({ content: '❌ Kérlek adj meg egy felhasználót, vagy válaszd a `global: Igaz` opciót!', ephemeral: true });
+
+                const targetDb = await getUserDb(i.guild.id, targetUser.id);
+                targetDb.balance += addAmount;
                 await targetDb.save();
-                return i.reply({ content: `✅ **Sikeres levonás!** Levontál **${formatFt(removeAmount)}**-ot <@${targetUser.id}> számlájáról!\n• Új egyenlege: **${formatFt(targetDb.balance)}**` });
+                return i.reply({ content: `✅ **Sikeres jóváírás!** Hozzáadtál **${formatFt(addAmount)}**-ot <@${targetUser.id}> számlájához!\n• Új egyenlege: **${formatFt(targetDb.balance)}**` });
             }
         }
 
