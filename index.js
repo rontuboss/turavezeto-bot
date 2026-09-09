@@ -19,11 +19,11 @@ const CONFIG = {
     BOOSTER_ROLE: '1449473778386997311',
     STAFF_ROLE: '1436671411178569832',
     MEMBER_ROLE: '1486847637134246139',
-    FIXED_USER_ID: '1546986417631002676' // 👑 Tulajdonos / Fejlesztő ID
+    FIXED_USER_ID: '1127950309247942797' // 👑 Kizárólag a te Discord ID-d használhatja a .maintenance-t
 };
 
-const BASE_BTC_PRICE = 35000000; // Alap BTC ár (35,000,000 Ft)
-let isMaintenanceMode = false; // Karbantartás állapota
+const BASE_BTC_PRICE = 35000000;
+let isMaintenanceMode = false;
 
 // ==========================================
 // 2. DATABASE & MODELS
@@ -49,6 +49,18 @@ const User = mongoose.model('User', new mongoose.Schema({
     lastDaily: { type: Number, default: 0 },
     lastWeekly: { type: Number, default: 0 },
     lastWork: { type: Number, default: 0 },
+    totalMinedBtc: { type: Number, default: 0 },
+    totalLoanRepaid: { type: Number, default: 0 },
+    achievements: { type: [String], default: [] },
+    quests: {
+        lastReset: { type: Number, default: 0 },
+        playBj: { type: Number, default: 0 },
+        claimBtc: { type: Number, default: 0 },
+        doWork: { type: Number, default: 0 },
+        claimedBjReward: { type: Boolean, default: false },
+        claimedBtcReward: { type: Boolean, default: false },
+        claimedWorkReward: { type: Boolean, default: false }
+    },
     stats: {
         blackjack: { played: { type: Number, default: 0 }, won: { type: Number, default: 0 }, netProfit: { type: Number, default: 0 } },
         mines: { played: { type: Number, default: 0 }, won: { type: Number, default: 0 }, netProfit: { type: Number, default: 0 } }
@@ -77,10 +89,11 @@ const client = new Client({
 // MEMÓRIA TÁROLÓK
 const activeMines = new Map();
 const activeBlackjack = new Map();
+const activeCoinflips = new Map();
 const commandCooldowns = new Map();
 
 // ==========================================
-// 3. HARDVER, SZOBA ÉS HŰTŐ ADATOK
+// 3. HARDVER & KINCS ADATOK
 // ==========================================
 const ROOMS = {
     alagsor: { name: '📦 Alagsori Doboz', price: 0, maxGpus: 4, failChance: 0.12, multiplier: 1.0 },
@@ -114,7 +127,6 @@ async function syncUserGpuStats() {
     try {
         const users = await User.find({ "rigs.0": { $exists: true } });
         let updatedCount = 0;
-
         for (const user of users) {
             let isModified = false;
             for (let i = 0; i < user.rigs.length; i++) {
@@ -131,25 +143,20 @@ async function syncUserGpuStats() {
                 updatedCount++;
             }
         }
-        if (updatedCount > 0) {
-            console.log(`🔄 ${updatedCount} felhasználó videokártyái sikeresen frissítve!`);
-        }
+        if (updatedCount > 0) console.log(`🔄 ${updatedCount} felhasználó videokártyái sikeresen frissítve!`);
     } catch (err) {
         console.error('❌ Hiba a kártyák szinkronizálásakor:', err);
     }
 }
 
 // ==========================================
-// 4. HELPER & TIME FUNCTIONS
+// 4. HELPER & ACHIEVEMENTS LOGIC
 // ==========================================
 const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' Ft';
 const formatBtc = (amount) => (amount || 0).toFixed(8) + ' BTC';
 const formatBtcWithFt = (btcAmount, priceFt) => `${formatBtc(btcAmount)} (~${formatFt(Math.floor((btcAmount || 0) * priceFt))})`;
 
-const getBudapestDate = () => {
-    return new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Budapest" }));
-};
-
+const getBudapestDate = () => new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Budapest" }));
 const getBudapestMidnightMs = () => {
     const bpNow = getBudapestDate();
     return new Date(bpNow.getFullYear(), bpNow.getMonth(), bpNow.getDate()).getTime();
@@ -160,9 +167,6 @@ const getUserDb = async (guildId, userId) => {
     if (!user) {
         const initialBalance = (userId === CONFIG.FIXED_USER_ID) ? 10000000 : 0;
         user = new User({ guildId, userId, balance: initialBalance, loanDebt: 0, rigs: [] });
-        await user.save();
-    } else if (userId === CONFIG.FIXED_USER_ID && user.balance !== 10000000) {
-        user.balance = 10000000;
         await user.save();
     }
     return user;
@@ -177,15 +181,39 @@ async function getGuildSettings(guildId) {
     return settings;
 }
 
+async function checkAndGrantAchievements(userDb, channel) {
+    if (!userDb.achievements) userDb.achievements = [];
+    const newUnlocked = [];
+
+    const achievementsList = [
+        { id: 'mined_1btc', name: '⛏️ Bányász Mester', desc: 'Termelj ki legalább 1.0 BTC-t!', check: () => (userDb.totalMinedBtc || 0) >= 1.0 },
+        { id: 'loan_repaid_50m', name: '🏦 Hitelmentes Gigász', desc: 'Fizess vissza összesen 50,000,000 Ft hitelt!', check: () => (userDb.totalLoanRepaid || 0) >= 50000000 },
+        { id: 'mines_10_bombs', name: '💣 Aknamentesítő', desc: 'Nyerj egy legalább 10 bombás Mines kört!', check: () => false },
+        { id: 'bj_wins_25', name: '♠️ Kaszinó Cápa', desc: 'Nyerj legalább 25 Blackjack meccset!', check: () => (userDb.stats?.blackjack?.won || 0) >= 25 }
+    ];
+
+    for (const ach of achievementsList) {
+        if (!userDb.achievements.includes(ach.id) && ach.check()) {
+            userDb.achievements.push(ach.id);
+            newUnlocked.push(ach.name);
+        }
+    }
+
+    if (newUnlocked.length > 0) {
+        await userDb.save();
+        if (channel) {
+            channel.send(`🎉 <@${userDb.userId}> feloldotta a következő mérföldköve(ke)t: **${newUnlocked.join(', ')}**! 🏆`).catch(() => {});
+        }
+    }
+}
+
 async function addLossToVault(guildId, amount) {
     if (amount <= 0) return;
     try {
         const settings = await getGuildSettings(guildId);
         settings.casinoLossVault += amount;
         await settings.save();
-    } catch (e) {
-        console.error('❌ Hiba a globális kaszinó veszteség frissítésekor:', e);
-    }
+    } catch (e) {}
 }
 
 async function addWinToVault(guildId, amount) {
@@ -194,9 +222,7 @@ async function addWinToVault(guildId, amount) {
         const settings = await getGuildSettings(guildId);
         settings.casinoWinVault = (settings.casinoWinVault || 0) + amount;
         await settings.save();
-    } catch (e) {
-        console.error('❌ Hiba a globális kaszinó nyeremény frissítésekor:', e);
-    }
+    } catch (e) {}
 }
 
 function drawWinners(participants, count) {
@@ -218,7 +244,7 @@ const updateStatus = (g) => {
     if (isMaintenanceMode) {
         client.user.setPresence({ activities: [{ name: `🛠️ KARBANTARTÁS ÁLLAPOTBAN`, type: 0 }], status: 'dnd' });
     } else {
-        client.user.setPresence({ activities: [{ name: `👥 ${g.memberCount} tag | /blackjack`, type: 4 }], status: 'online' });
+        client.user.setPresence({ activities: [{ name: `👥 ${g.memberCount} tag | /coinflip`, type: 4 }], status: 'online' });
     }
 };
 
@@ -291,7 +317,7 @@ async function moveTicketCategory(channel, guild, type) {
 }
 
 // ==========================================
-// 6. MINIGAME LOGIC (MINES 5x5 & BLACKJACK)
+// 6. MINIGAME LOGIC
 // ==========================================
 function getMinesMultiplier(totalTiles, bombs, revealed) {
     let mult = 0.96; 
@@ -362,7 +388,7 @@ function calculateHand(cards) {
 }
 
 // ==========================================
-// 7. GIVEAWAY, REMINDERS & TIMERS
+// 7. TIMERS & MARKET EVENTS
 // ==========================================
 async function endGiveaway(gwData) {
     try {
@@ -432,11 +458,24 @@ setInterval(async () => {
                 settings.btcHistory.push(settings.btcPriceFt);
                 if (settings.btcHistory.length > 3) settings.btcHistory.shift();
 
-                const changePercent = (Math.random() * 0.08 - 0.04);
+                let eventText = '';
+                let changePercent = (Math.random() * 0.08 - 0.04);
+
+                if (Math.random() < 0.35) {
+                    const newsEvents = [
+                        { text: '🟢 **NEWS FLASH:** A világ legnagyobb technológiai vállalata bejelentette, hogy felveszi a BTC-t a széfjébe! (+22%)', mult: 0.22 },
+                        { text: '🟢 **NEWS FLASH:** Sikerült áttörést elérni a kvantumbiztos kriptográfiában! A bizalom szárnyal! (+15%)', mult: 0.15 },
+                        { text: '🔴 **NEWS FLASH:** Nagyfokú szerverleállás történt az ázsiai bányászközpontokban! (-20%)', mult: -0.20 },
+                        { text: '🔴 **NEWS FLASH:** A központi bankok szigorúbb szabályozást lebegtettek be! (-18%)', mult: -0.18 }
+                    ];
+                    const chosen = newsEvents[Math.floor(Math.random() * newsEvents.length)];
+                    eventText = `\n\n📢 **PIACI HÍREK:**\n${chosen.text}`;
+                    changePercent = chosen.mult;
+                }
+
                 let newPrice = Math.floor(settings.btcPriceFt * (1 + changePercent));
-                
-                const minPrice = BASE_BTC_PRICE * 0.50;
-                const maxPrice = BASE_BTC_PRICE * 1.50;
+                const minPrice = BASE_BTC_PRICE * 0.40;
+                const maxPrice = BASE_BTC_PRICE * 2.00;
 
                 if (newPrice < minPrice) newPrice = minPrice;
                 if (newPrice > maxPrice) newPrice = maxPrice;
@@ -448,34 +487,11 @@ setInterval(async () => {
                 if (minerCh) {
                     const diffPercent = (((newPrice - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
                     const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
-                    const history = settings.btcHistory;
-                    
-                    let historyText = '';
-                    let tempComparePrice = newPrice;
-
-                    for (let idx = history.length - 1; idx >= 0; idx--) {
-                        const pastPrice = history[idx];
-                        const diff = tempComparePrice - pastPrice;
-                        const hoursAgo = history.length - idx;
-
-                        if (diff > 0) {
-                            historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (🟢 \`+${formatFt(diff)}\`)\n`;
-                        } else if (diff < 0) {
-                            historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (🔴 \`-${formatFt(Math.abs(diff))}\`)\n`;
-                        } else {
-                            historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (⚪ \`0 Ft\`)\n`;
-                        }
-                        tempComparePrice = pastPrice;
-                    }
 
                     const btcEmbed = new EmbedBuilder()
                         .setColor(diffPercent >= 0 ? '#2ecc71' : '#e74c3c')
                         .setTitle('📊 ÓRÁNKÉNTI BITCOIN ÁRFOLYAM JELENTÉS')
-                        .addFields(
-                            { name: '🪙 Jelenlegi Árfolyam', value: `**1 BTC = ${formatFt(newPrice)}**`, inline: false },
-                            { name: '📈 Összesített Változás', value: `\`\`\`diff\n${diffTag}\`\`\``, inline: false },
-                            { name: '🕰️ Elmúlt 3 Óra Árfolyamai', value: historyText || 'Még nincs elég adat.', inline: false }
-                        );
+                        .setDescription(`🪙 **1 BTC = ${formatFt(newPrice)}** (Összváltozás: \`${diffTag}\`)${eventText}`);
 
                     minerCh.send({ embeds: [btcEmbed] }).catch(() => {});
                 }
@@ -485,7 +501,6 @@ setInterval(async () => {
             for (const u of users) {
                 const room = ROOMS[u.roomType || 'alagsor'];
                 const cooler = COOLERS[u.coolerType || 'stock'];
-                
                 const finalFailChance = Math.max(0.005, room.failChance - cooler.failReduce);
 
                 if (Math.random() < finalFailChance) {
@@ -494,14 +509,10 @@ setInterval(async () => {
                     await u.save();
                     
                     const ch = client.channels.cache.get(CONFIG.MINER_CHANNEL);
-                    if (ch) {
-                        ch.send(`⚡ 🚨 **TÚLMELEGEDÉS / MEGHIBÁSODÁS!** <@${u.userId}> szerverterme leállt! Használd a \`/crypto szerviz\` parancsot a javításhoz!`).catch(() => {});
-                    }
+                    if (ch) ch.send(`⚡ 🚨 **TÚLMELEGEDÉS!** <@${u.userId}> szerverterme leállt! Használd a \`/crypto szerviz\` parancsot!`).catch(() => {});
                 }
             }
-        } catch (e) {
-            console.error('❌ Hiba az óránkénti frissítésnél:', e);
-        }
+        } catch (e) { console.error(e); }
     }
 }, 10000);
 
@@ -538,19 +549,17 @@ const commands = [
         .addSubcommand(s => s.setName('sorsolas').setDescription('Nyereményjáték kategóriába'))
         .addSubcommand(s => s.setName('partner').setDescription('Partner kategóriába'))
         .addSubcommand(s => s.setName('sima').setDescription('Vissza az alapértelmezett kategóriába')),
-    new SlashCommandBuilder().setName('removeloan').setDescription('Hitel törlése egy felhasználóról (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
-        .addUserOption(o => o.setName('user').setDescription('Kinek a hitelét töröljük?').setRequired(true))
-        .addIntegerOption(o => o.setName('osszeg').setDescription('Törlendő összeg (Ha üres, a teljes hitelt törli)')),
-    
-    new SlashCommandBuilder().setName('removebalance').setDescription('Pénz levonása / nullázása egyénileg vagy MINDENKITŐL (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
-        .addUserOption(o => o.setName('user').setDescription('Kinek a számlájáról vonjunk le pénzt? (Egyéni levonáshoz)'))
-        .addNumberOption(o => o.setName('osszeg').setDescription('Levonandó összeg (Ha üres, a teljes egyenleget nullázza)'))
-        .addBooleanOption(o => o.setName('global').setDescription('Igaz esetén GLOBÁLISAN MINDENKITŐL levonja/nullázza!')),
-
-    new SlashCommandBuilder().setName('addbalance').setDescription('Pénz adása egyénileg vagy GLOBÁLISAN mindenkinek (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
-        .addNumberOption(o => o.setName('osszeg').setDescription('Jóváírandó összeg').setRequired(true))
-        .addUserOption(o => o.setName('user').setDescription('Kinek adjunk pénzt? (Egyéni adáshoz)'))
-        .addBooleanOption(o => o.setName('global').setDescription('Igaz esetén GLOBÁLISAN MINDENKI megkapja a pénzt!')),
+    new SlashCommandBuilder().setName('removeloan').setDescription('Hitel törlése (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
+        .addUserOption(o => o.setName('user').setDescription('Felhasználó').setRequired(true))
+        .addIntegerOption(o => o.setName('osszeg').setDescription('Törlendő összeg')),
+    new SlashCommandBuilder().setName('removebalance').setDescription('Pénz levonása (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
+        .addUserOption(o => o.setName('user').setDescription('Felhasználó'))
+        .addNumberOption(o => o.setName('osszeg').setDescription('Összeg'))
+        .addBooleanOption(o => o.setName('global').setDescription('Globális-e')),
+    new SlashCommandBuilder().setName('addbalance').setDescription('Pénz adása (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
+        .addNumberOption(o => o.setName('osszeg').setDescription('Összeg').setRequired(true))
+        .addUserOption(o => o.setName('user').setDescription('Felhasználó'))
+        .addBooleanOption(o => o.setName('global').setDescription('Globális-e')),
 
     new SlashCommandBuilder().setName('fakeban').setDescription('Troll kamu kitiltás').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addUserOption(o => o.setName('user').setDescription('Felhasználó').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('Indok')),
     new SlashCommandBuilder().setName('nitro').setDescription('Ingyen Discord Nitro ajándék (kamu)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false),
@@ -559,49 +568,53 @@ const commands = [
     new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addUserOption(o => o.setName('user').setDescription('Kinek szóljon?').setRequired(true)),
     new SlashCommandBuilder().setName('rate').setDescription('Értékelj bármit').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addStringOption(o => o.setName('thing').setDescription('Mit értékeljen?').setRequired(true)),
 
+    new SlashCommandBuilder().setName('coinflip').setDescription('Párbaj egy másik játékossal (3% kaszinó jutalék)')
+        .addUserOption(o => o.setName('user').setDescription('Kivel szeretnél párbajozni?').setRequired(true))
+        .addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)),
+
+    new SlashCommandBuilder().setName('achievements').setDescription('Mérföldkövek és elért kitüntetések lekérése').addUserOption(o => o.setName('user').setDescription('Kinek a mérföldkövei?')),
+    new SlashCommandBuilder().setName('quests').setDescription('Napi küldetések és jutalmak átvétele'),
+
     new SlashCommandBuilder().setName('btc').setDescription('Bitcoin parancsok')
-        .addSubcommand(s => s.setName('ar').setDescription('Bitcoin aktuális ára Ft-ban és az előző 3 árfolyam változás'))
-        .addSubcommand(s => s.setName('sell').setDescription('Bitcoin eladása készpénzért (Ft)').addNumberOption(o => o.setName('btc').setDescription('Eladandó BTC').setRequired(true))),
+        .addSubcommand(s => s.setName('ar').setDescription('Bitcoin ára'))
+        .addSubcommand(s => s.setName('sell').setDescription('BTC eladása').addNumberOption(o => o.setName('btc').setDescription('Eladandó BTC').setRequired(true))),
 
-    new SlashCommandBuilder().setName('miner').setDescription('Bányász bolt megnyitása')
-        .addSubcommand(s => s.setName('bolt').setDescription('Bányász bolt megnyitása (Kártyák, Szobák, Hűtők)')),
+    new SlashCommandBuilder().setName('miner').setDescription('Bányász bolt').addSubcommand(s => s.setName('bolt').setDescription('Bolt megnyitása')),
+    new SlashCommandBuilder().setName('crypto').setDescription('Bányász farm kezelése')
+        .addSubcommand(s => s.setName('farm').setDescription('Farm állapota'))
+        .addSubcommand(s => s.setName('claim').setDescription('BTC begyűjtése'))
+        .addSubcommand(s => s.setName('kartya-eladas').setDescription('Kártya eladása'))
+        .addSubcommand(s => s.setName('szerviz').setDescription('Szerverterem javítása')),
 
-    new SlashCommandBuilder().setName('crypto').setDescription('Bányász farm és szerverterem kezelés')
-        .addSubcommand(s => s.setName('farm').setDescription('Saját szerverterem és rigek állapota'))
-        .addSubcommand(s => s.setName('claim').setDescription('Kitermelt Bitcoin begyűjtése'))
-        .addSubcommand(s => s.setName('kartya-eladas').setDescription('Birtokolt videokártya eladása (60%-os áron)'))
-        .addSubcommand(s => s.setName('szerviz').setDescription('Szerverterem javítása (100k Ft / 1 óra)')),
-
-    new SlashCommandBuilder().setName('invites').setDescription('Meghívók lekérése').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
-    new SlashCommandBuilder().setName('treasure').setDescription('Ingyen Forint kikérése (Boostereknek 7 perc, másnak 10 perc)'),
-    new SlashCommandBuilder().setName('daily').setDescription('Napi ingyen jutalom (1.000.000 Ft, budapesti éjféli reset)'),
-    new SlashCommandBuilder().setName('weekly').setDescription('Heti ingyen jutalom (10.000.000 Ft, 7 naponta)'),
-    new SlashCommandBuilder().setName('work').setDescription('Munkavégzés pénzért (1 perc cooldown)'),
-    new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Kinek az egyenlege?')),
-    new SlashCommandBuilder().setName('stat').setDescription('Kaszinó statisztika lekérése').addUserOption(o => o.setName('user').setDescription('Kinek a statisztikája?')),
-    new SlashCommandBuilder().setName('hitel').setDescription('Banki hitel parancsok (10% kamat)')
-        .addSubcommand(s => s.setName('felvesz').setDescription('Hitel felvétele (max 50 millió Ft)').addIntegerOption(o => o.setName('osszeg').setDescription('Igényelt összeg (Ft)').setRequired(true).setMinValue(1).setMaxValue(50000000)))
-        .addSubcommand(s => s.setName('statusz').setDescription('Aktuális hitel lekérése'))
-        .addSubcommand(s => s.setName('torleszt').setDescription('Hitel visszafizetése').addIntegerOption(o => o.setName('osszeg').setDescription('Visszafizetendő összeg (Ft)').setRequired(true).setMinValue(1))),
-    new SlashCommandBuilder().setName('top').setDescription('A szerver leggazdagabb tagjai'),
-    new SlashCommandBuilder().setName('mines').setDescription('Aknakereső kaszinó minijáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)).addIntegerOption(o => o.setName('bombs').setDescription('Bombák száma (1-24)').setRequired(true).setMinValue(1).setMaxValue(24)),
-    new SlashCommandBuilder().setName('blackjack').setDescription('Klasszikus 21-es blackjack kártyajáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)),
-    new SlashCommandBuilder().setName('iq').setDescription('IQ teszt mérés').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
-    new SlashCommandBuilder().setName('meret').setDescription('Faszméret mérés').addUserOption(o => o.setName('user').setDescription('Kinek a mérete?'))
+    new SlashCommandBuilder().setName('invites').setDescription('Meghívók').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
+    new SlashCommandBuilder().setName('treasure').setDescription('Kincs kikérése'),
+    new SlashCommandBuilder().setName('daily').setDescription('Napi ingyen jutalom'),
+    new SlashCommandBuilder().setName('weekly').setDescription('Heti ingyen jutalom'),
+    new SlashCommandBuilder().setName('work').setDescription('Munkavégzés'),
+    new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
+    new SlashCommandBuilder().setName('stat').setDescription('Kaszinó statisztika').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
+    new SlashCommandBuilder().setName('hitel').setDescription('Banki hitel')
+        .addSubcommand(s => s.setName('felvesz').setDescription('Hitel felvétele').addIntegerOption(o => o.setName('osszeg').setDescription('Összeg').setRequired(true)))
+        .addSubcommand(s => s.setName('statusz').setDescription('Státusz'))
+        .addSubcommand(s => s.setName('torleszt').setDescription('Törlesztés').addIntegerOption(o => o.setName('osszeg').setDescription('Összeg').setRequired(true))),
+    new SlashCommandBuilder().setName('top').setDescription('Toplista'),
+    new SlashCommandBuilder().setName('mines').setDescription('Mines játék').addIntegerOption(o => o.setName('bet').setDescription('Tét').setRequired(true)).addIntegerOption(o => o.setName('bombs').setDescription('Bombák').setRequired(true)),
+    new SlashCommandBuilder().setName('blackjack').setDescription('Blackjack játék').addIntegerOption(o => o.setName('bet').setDescription('Tét').setRequired(true)),
+    new SlashCommandBuilder().setName('iq').setDescription('IQ teszt').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
+    new SlashCommandBuilder().setName('meret').setDescription('Méret teszt').addUserOption(o => o.setName('user').setDescription('Felhasználó'))
 ].map(c => c.toJSON());
 
 // ==========================================
-// 9. BOT READY & EVENT LISTENERS
+// 9. BOT READY & LISTENERS
 // ==========================================
 client.once('ready', async () => {
     console.log(`Sikeresen elindult: ${client.user.tag}`);
     try {
         await new REST({ version: '10' }).setToken(process.env.TOKEN).put(Routes.applicationGuildCommands(client.user.id, CONFIG.GUILD_ID), { body: commands });
-        console.log('✅ Szerver-specifikus Slash parancsok frissítve!');
-    } catch (err) { console.error('❌ Hiba a parancsok regisztrációjánál:', err); }
+        console.log('✅ Slash parancsok frissítve!');
+    } catch (err) { console.error(err); }
 
     await syncUserGpuStats();
-
     updateStatus(client.guilds.cache.first());
 
     const active = await Giveaway.find({ ended: false });
@@ -630,20 +643,15 @@ client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.guild) return;
     const cmd = m.content.toLowerCase().trim();
 
-    // 🛠️ KARBANTARTÁS MÓD KAPCSOLÓ PARANCS (Csak a megadott FIXED_USER_ID használhatja)
+    // 🛠️ KARBANTARTÁS MÓD (KIZÁRÓLAG A TE DISCORD ID-D HASZNÁLHATJA: 1127950309247942797)
     if (cmd === '.maintenance') {
         if (m.author.id !== CONFIG.FIXED_USER_ID) {
-            return m.reply('❌ Nincs jogosultságod a karbantartás mód be- és kikapcsolásához!').catch(() => {});
+            return m.reply('❌ Nincs jogosultságod a karbantartás mód használatához! Kizárólag a bot tulajdonosa indíthatja el.').catch(() => {});
         }
 
         isMaintenanceMode = !isMaintenanceMode;
         updateStatus(m.guild);
-
-        if (isMaintenanceMode) {
-            return m.reply('🛠️ **KARBANTARTÁS MÓD BEKAPCSOLVA!** A felhasználók mostantól nem tudnak parancsokat kiadni.').catch(() => {});
-        } else {
-            return m.reply('✅ **KARBANTARTÁS MÓD KIKAPCSOLVA!** A bot újra normálisan működik mindenkinek.').catch(() => {});
-        }
+        return m.reply(isMaintenanceMode ? '🛠️ **KARBANTARTÁS MÓD BEKAPCSOLVA!** A felhasználók elől a parancsok zárolva lettek.' : '✅ **KARBANTARTÁS MÓD KIKAPCSOLVA!** A bot újra használható mindenkinek.').catch(() => {});
     }
 
     if (Math.random() < 0.015) m.react(Math.random() < 0.5 ? '🤡' : '🤓').catch(() => {});
@@ -668,7 +676,7 @@ client.on('messageCreate', async (m) => {
 });
 
 // ==========================================
-// 10. INTERACTIONS & REACTION HANDLERS
+// 10. REACTION & INTERACTION HANDLERS
 // ==========================================
 client.on('messageReactionAdd', async (reaction, user) => {
     if (user.bot || !reaction.message.guild) return;
@@ -718,7 +726,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
 client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton() && !i.isStringSelectMenu()) return;
 
-    // 🛠️ KARBANTARTÁS VÉDELEM KISZŰRÉSE
     if (isMaintenanceMode && i.user.id !== CONFIG.FIXED_USER_ID) {
         return i.reply({ content: '⚠️ **A bot jelenleg karbantartás alatt áll!** Kérjük, próbáld meg később.', ephemeral: true });
     }
@@ -726,7 +733,7 @@ client.on('interactionCreate', async (i) => {
     if (i.isChatInputCommand()) {
         const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE);
         const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
-        const allowedForMembers = ['mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'hitel', 'btc', 'miner', 'crypto'];
+        const allowedForMembers = ['coinflip', 'achievements', 'quests', 'mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'hitel', 'btc', 'miner', 'crypto'];
 
         if (!isMember) return i.reply({ content: '❌ Nincs meg a szükséges rangod a parancsok használatához!', ephemeral: true });
         if (!allowedForMembers.includes(i.commandName) && !isStaff) return i.reply({ content: '❌ Ez a parancs kizárólag a kijelölt rangosoknak érhető el!', ephemeral: true });
@@ -759,13 +766,9 @@ client.on('interactionCreate', async (i) => {
                     const diff = tempComparePrice - pastPrice;
                     const hoursAgo = history.length - idx;
 
-                    if (diff > 0) {
-                        historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (🟢 \`+${formatFt(diff)}\`)\n`;
-                    } else if (diff < 0) {
-                        historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (🔴 \`-${formatFt(Math.abs(diff))}\`)\n`;
-                    } else {
-                        historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (⚪ \`0 Ft\`)\n`;
-                    }
+                    if (diff > 0) historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (🟢 \`+${formatFt(diff)}\`)\n`;
+                    else if (diff < 0) historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (🔴 \`-${formatFt(Math.abs(diff))}\`)\n`;
+                    else historyText += `• **${hoursAgo} órája:** ${formatFt(pastPrice)} (⚪ \`0 Ft\`)\n`;
                     tempComparePrice = pastPrice;
                 }
 
@@ -902,9 +905,15 @@ client.on('interactionCreate', async (i) => {
                 if (minedBtc <= 0) return i.reply({ content: '❌ Még nincs begyűjthető Bitcoinod!', ephemeral: true });
 
                 userDb.btcBalance = (userDb.btcBalance || 0) + minedBtc;
+                userDb.totalMinedBtc = (userDb.totalMinedBtc || 0) + minedBtc;
                 userDb.lastBtcClaim = now;
                 if (userDb.isBroken) userDb.brokenAt = now;
+
+                if (!userDb.quests) userDb.quests = {};
+                userDb.quests.claimBtc = (userDb.quests.claimBtc || 0) + 1;
+
                 await userDb.save();
+                await checkAndGrantAchievements(userDb, i.channel);
 
                 return i.reply({ content: `🎉 Sikeresen begyűjtöttél **${formatBtcWithFt(minedBtc, settings.btcPriceFt)}**-t!`, ephemeral: true });
             }
@@ -975,9 +984,6 @@ client.on('interactionCreate', async (i) => {
             }
         }
 
-        // ==========================================
-        // 💸 /REMOVEBALANCE & /ADDBALANCE LOGIKA
-        // ==========================================
         if (i.commandName === 'removebalance') {
             if (!isStaff) return i.reply({ content: '❌ Nincs jogosultságod ehhez a parancshoz!', ephemeral: true });
 
@@ -1028,6 +1034,102 @@ client.on('interactionCreate', async (i) => {
                 await targetDb.save();
                 return i.reply({ content: `✅ **Sikeres jóváírás!** Hozzáadtál **${formatFt(addAmount)}**-ot <@${targetUser.id}> számlájához!\n• Új egyenlege: **${formatFt(targetDb.balance)}**` });
             }
+        }
+
+        if (i.commandName === 'coinflip') {
+            const target = i.options.getUser('user');
+            const bet = i.options.getInteger('bet');
+
+            if (target.bot || target.id === i.user.id) {
+                return i.reply({ content: '❌ Magaddal vagy bottal nem párbajozhatsz!', ephemeral: true });
+            }
+
+            if (userDb.balance < bet) {
+                return i.reply({ content: '❌ Nincs elég egyenleged a kihíváshoz!', ephemeral: true });
+            }
+
+            const targetDb = await getUserDb(i.guild.id, target.id);
+            if (targetDb.balance < bet) {
+                return i.reply({ content: `❌ **${target.username}** nem rendelkezik elég pénzzel ehhez a téthez!`, ephemeral: true });
+            }
+
+            const flipId = `cf_${i.user.id}_${target.id}_${Date.now()}`;
+            activeCoinflips.set(flipId, { challengerId: i.user.id, targetId: target.id, bet });
+
+            const embed = new EmbedBuilder()
+                .setColor('#ffd700')
+                .setTitle('🪙 COINFLIP PÁRBAJ KIHÍVÁS!')
+                .setDescription(`<@${i.user.id}> kihívta <@${target.id}>-t egy **${formatFt(bet)}** tétű coinflip párbajra!\n\n*A nyertes viszi a potot (3% kaszinó jutalék levonással).*`);
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`cf_accept_${flipId}`).setLabel('✅ Elfogadás').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId(`cf_deny_${flipId}`).setLabel('❌ Elutasítás').setStyle(ButtonStyle.Danger)
+            );
+
+            return i.reply({ embeds: [embed], components: [row] });
+        }
+
+        if (i.commandName === 'achievements') {
+            const target = i.options.getUser('user') || i.user;
+            const targetDb = await getUserDb(i.guild.id, target.id);
+            const userAchs = targetDb.achievements || [];
+
+            const allAchs = [
+                { id: 'mined_1btc', name: '⛏️ Bányász Mester', desc: 'Termelj ki legalább 1.0 BTC-t!' },
+                { id: 'loan_repaid_50m', name: '🏦 Hitelmentes Gigász', desc: 'Fizess vissza összesen 50,000,000 Ft hitelt!' },
+                { id: 'mines_10_bombs', name: '💣 Aknamentesítő', desc: 'Nyerj egy legalább 10 bombás Mines kört!' },
+                { id: 'bj_wins_25', name: '♠️ Kaszinó Cápa', desc: 'Nyerj legalább 25 Blackjack meccset!' }
+            ];
+
+            let listStr = '';
+            allAchs.forEach(a => {
+                const isDone = userAchs.includes(a.id);
+                listStr += `${isDone ? '✅' : '🔒'} **${a.name}**\n> *${a.desc}*\n\n`;
+            });
+
+            const embed = new EmbedBuilder()
+                .setColor('#ffd700')
+                .setTitle(`🏆 ${target.username} Mérföldkövei (${userAchs.length}/${allAchs.length})`)
+                .setDescription(listStr);
+
+            return i.reply({ embeds: [embed] });
+        }
+
+        if (i.commandName === 'quests') {
+            const todayMidnight = getBudapestMidnightMs();
+            if (!userDb.quests) userDb.quests = {};
+
+            if ((userDb.quests.lastReset || 0) < todayMidnight) {
+                userDb.quests = {
+                    lastReset: todayMidnight,
+                    playBj: 0,
+                    claimBtc: 0,
+                    doWork: 0,
+                    claimedBjReward: false,
+                    claimedBtcReward: false,
+                    claimedWorkReward: false
+                };
+                await userDb.save();
+            }
+
+            const q = userDb.quests;
+            const embed = new EmbedBuilder()
+                .setColor('#00f2fe')
+                .setTitle('🎯 NAPI KÜLDETÉSEK')
+                .setDescription('Teljesítsd a napi feladatokat az extra jutalmakért!\n\n')
+                .addFields(
+                    { name: `1. Játssz 3 kör Blackjack-et (${q.playBj}/3)`, value: q.claimedBjReward ? '✅ **ÁTVÉVE** (+250 000 Ft)' : (q.playBj >= 3 ? '🎉 **TELJESÍTVE!** Kattints az átvételhez!' : '⏳ Folyamatban... (+250 000 Ft)'), inline: false },
+                    { name: `2. Gyűjts be BTC-t a farmodról (${q.claimBtc}/1)`, value: q.claimedBtcReward ? '✅ **ÁTVÉVE** (+0.0005 BTC)' : (q.claimBtc >= 1 ? '🎉 **TELJESÍTVE!** Kattints az átvételhez!' : '⏳ Folyamatban... (+0.0005 BTC)'), inline: false },
+                    { name: `3. Dolgozz legalább 2-szer (${q.doWork}/2)`, value: q.claimedWorkReward ? '✅ **ÁTVÉVE** (+100 000 Ft)' : (q.doWork >= 2 ? '🎉 **TELJESÍTVE!** Kattints az átvételhez!' : '⏳ Folyamatban... (+100 000 Ft)'), inline: false }
+                );
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`claim_q_bj_${i.user.id}`).setLabel('💰 1. Jutalma').setStyle(ButtonStyle.Success).setDisabled(q.playBj < 3 || q.claimedBjReward),
+                new ButtonBuilder().setCustomId(`claim_q_btc_${i.user.id}`).setLabel('🪙 2. Jutalma').setStyle(ButtonStyle.Success).setDisabled(q.claimBtc < 1 || q.claimedBtcReward),
+                new ButtonBuilder().setCustomId(`claim_q_work_${i.user.id}`).setLabel('💵 3. Jutalma').setStyle(ButtonStyle.Success).setDisabled(q.doWork < 2 || q.claimedWorkReward)
+            );
+
+            return i.reply({ embeds: [embed], components: [row] });
         }
 
         if (['meret', 'iq'].includes(i.commandName)) {
@@ -1093,9 +1195,11 @@ client.on('interactionCreate', async (i) => {
             }
 
             const workAmount = Math.floor(Math.random() * (25000 - 10000 + 1)) + 10000;
-
             userDb.balance += workAmount;
             userDb.lastWork = now;
+            
+            if (!userDb.quests) userDb.quests = {};
+            userDb.quests.doWork = (userDb.quests.doWork || 0) + 1;
             await userDb.save();
 
             const jobs = [
@@ -1119,21 +1223,14 @@ client.on('interactionCreate', async (i) => {
             }
 
             const isSuperChest = Math.random() < 0.05;
-            const baseMin = 10000;
-            const baseMax = 25000;
-            const randomBase = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
-            
-            const amount = isSuperChest ? 100000 : randomBase;
+            const amount = isSuperChest ? 100000 : Math.floor(Math.random() * 15000) + 10000;
 
             userDb.balance += amount;
             userDb.lastTreasure = now;
             await userDb.save();
 
-            if (isSuperChest) {
-                return i.reply({ content: `✨ **SZUPER LÁDA JACKPOT!** ✨ Ritka kincset találtál: **${formatFt(amount)}** íródott jóvá az egyenlegeden! 🎉` });
-            } else {
-                return i.reply({ content: `🪙 Kinyitottad a ládát és találtál benne: **${formatFt(amount)}**-ot!` });
-            }
+            if (isSuperChest) return i.reply({ content: `✨ **SZUPER LÁDA JACKPOT!** ✨ Ritka kincset találtál: **${formatFt(amount)}** íródott jóvá az egyenlegeden! 🎉` });
+            else return i.reply({ content: `🪙 Kinyitottad a ládát és találtál benne: **${formatFt(amount)}**-ot!` });
         }
 
         if (i.commandName === 'bal') {
@@ -1180,9 +1277,7 @@ client.on('interactionCreate', async (i) => {
                 }
 
                 const amount = i.options.getInteger('osszeg');
-                if (amount > 50000000) {
-                    return i.reply({ content: `❌ Legfeljebb 50 000 000 Ft hitelt vehetsz fel!`, ephemeral: true });
-                }
+                if (amount > 50000000) return i.reply({ content: `❌ Legfeljebb 50 000 000 Ft hitelt vehetsz fel!`, ephemeral: true });
 
                 const debtWithInterest = Math.floor(amount * 1.10);
                 userDb.balance += amount;
@@ -1204,7 +1299,10 @@ client.on('interactionCreate', async (i) => {
                 const payAmount = Math.min(amount, userDb.loanDebt);
                 userDb.balance -= payAmount;
                 userDb.loanDebt -= payAmount;
+                userDb.totalLoanRepaid = (userDb.totalLoanRepaid || 0) + payAmount;
+
                 await userDb.save();
+                await checkAndGrantAchievements(userDb, i.channel);
 
                 return i.reply({ content: `✅ Sikeresen törlesztettél **${formatFt(payAmount)}**-ot a hiteledből!\n• Hátralévő tartozás: **${formatFt(userDb.loanDebt)}**\n• Új egyenleg: **${formatFt(userDb.balance)}**` });
             }
@@ -1265,6 +1363,8 @@ client.on('interactionCreate', async (i) => {
             if (userDb.balance < bet) return i.reply({ content: '❌ Nincs elég egyenleged ehhez a téthez!', ephemeral: true });
 
             userDb.balance -= bet;
+            if (!userDb.quests) userDb.quests = {};
+            userDb.quests.playBj = (userDb.quests.playBj || 0) + 1;
             await userDb.save();
 
             const playerCards = [getRandomCard(), getRandomCard()];
@@ -1286,6 +1386,7 @@ client.on('interactionCreate', async (i) => {
                 await userDb.save();
 
                 await addWinToVault(i.guild.id, profit);
+                await checkAndGrantAchievements(userDb, i.channel);
 
                 const embed = new EmbedBuilder()
                     .setColor('#ffd700')
@@ -1466,7 +1567,6 @@ client.on('interactionCreate', async (i) => {
 
         if (i.customId.startsWith('miner_claim_btn_')) {
             const ownerId = i.customId.replace('miner_claim_btn_', '');
-            
             if (ownerId !== i.user.id) {
                 return i.reply({ content: '❌ Ez nem a te bányász farmod! Nyiss egy sajátot a `/crypto farm` parancssal! 🤡', ephemeral: true });
             }
@@ -1666,6 +1766,7 @@ client.on('interactionCreate', async (i) => {
                     userDb.stats.blackjack.netProfit += game.bet;
                     resultText = `🎉 **NYERTÉL!** Kaptál **${formatFt(wonAmount)}**-ot!`;
                     await addWinToVault(i.guild.id, game.bet);
+                    await checkAndGrantAchievements(userDb, i.channel);
                 } else if (playerSum === dealerSum) {
                     embedColor = '#ffd700';
                     userDb.balance += game.bet;
@@ -1714,6 +1815,78 @@ client.on('interactionCreate', async (i) => {
             const currentMult = getMinesMultiplier(25, game.bombs, game.revealed.length);
             const currentWin = Math.floor(game.bet * currentMult);
             return i.update({ embeds: [createMinesEmbed(game.bet, game.bombs, game.revealed.length, currentMult, currentWin)], components: buildMinesComponents(game, false) });
+        }
+
+        if (i.customId.startsWith('cf_accept_') || i.customId.startsWith('cf_deny_')) {
+            const flipId = i.customId.replace('cf_accept_', '').replace('cf_deny_', '');
+            const flip = activeCoinflips.get(flipId);
+
+            if (!flip) return i.reply({ content: '❌ Ez a kihívás már lejárt vagy érvénytelen!', ephemeral: true });
+            if (i.user.id !== flip.targetId) return i.reply({ content: '❌ Nem neked címezték ezt a kihívást!', ephemeral: true });
+
+            if (i.customId.startsWith('cf_deny_')) {
+                activeCoinflips.delete(flipId);
+                return i.update({ content: `❌ <@${i.user.id}> elutasította a coinflip párbajt!`, embeds: [], components: [] });
+            }
+
+            const challengerDb = await getUserDb(i.guild.id, flip.challengerId);
+
+            if (challengerDb.balance < flip.bet || userDb.balance < flip.bet) {
+                activeCoinflips.delete(flipId);
+                return i.update({ content: `❌ Valamelyik félnek már nincs elég egyenlege a párbaj lefolytatásához!`, embeds: [], components: [] });
+            }
+
+            const winnerId = Math.random() < 0.5 ? flip.challengerId : flip.targetId;
+            const loserId = winnerId === flip.challengerId ? flip.targetId : flip.challengerId;
+
+            const totalPot = flip.bet * 2;
+            const fee = Math.floor(totalPot * 0.03);
+            const finalWin = totalPot - fee;
+
+            const winnerDb = await getUserDb(i.guild.id, winnerId);
+            const loserDb = await getUserDb(i.guild.id, loserId);
+
+            winnerDb.balance += (finalWin - flip.bet);
+            loserDb.balance -= flip.bet;
+
+            await winnerDb.save();
+            await loserDb.save();
+            await addLossToVault(i.guild.id, fee);
+
+            activeCoinflips.delete(flipId);
+
+            const resultEmbed = new EmbedBuilder()
+                .setColor('#00ff00')
+                .setTitle('🪙 COINFLIP PÁRBAJ VÉGEREDMÉNY!')
+                .setDescription(`🏆 **GYŐZTES:** <@${winnerId}>\n💀 **VESZTES:** <@${loserId}>\n\n💰 **Nyeremény:** **${formatFt(finalWin)}** *(Levont kaszinó jutalék 3%: ${formatFt(fee)})*`);
+
+            return i.update({ embeds: [resultEmbed], components: [] });
+        }
+
+        if (i.customId.startsWith('claim_q_')) {
+            const q = userDb.quests;
+            if (i.customId.startsWith('claim_q_bj_')) {
+                if (q.playBj >= 3 && !q.claimedBjReward) {
+                    q.claimedBjReward = true;
+                    userDb.balance += 250000;
+                    await userDb.save();
+                    return i.reply({ content: '🎉 Átvetted a Blackjack küldetés jutalmát: **250 000 Ft**!', ephemeral: true });
+                }
+            } else if (i.customId.startsWith('claim_q_btc_')) {
+                if (q.claimBtc >= 1 && !q.claimedBtcReward) {
+                    q.claimedBtcReward = true;
+                    userDb.btcBalance = (userDb.btcBalance || 0) + 0.0005;
+                    await userDb.save();
+                    return i.reply({ content: '🎉 Átvetted a Bányász küldetés jutalmát: **0.0005 BTC**!', ephemeral: true });
+                }
+            } else if (i.customId.startsWith('claim_q_work_')) {
+                if (q.doWork >= 2 && !q.claimedWorkReward) {
+                    q.claimedWorkReward = true;
+                    userDb.balance += 100000;
+                    await userDb.save();
+                    return i.reply({ content: '🎉 Átvetted a Munkás küldetés jutalmát: **100 000 Ft**!', ephemeral: true });
+                }
+            }
         }
 
         if (i.customId === 'claim_fake_nitro') return i.reply({ content: `🎉 **<@${i.user.id}>** bedőlt a kamu Nitrónak! 🤡` });
