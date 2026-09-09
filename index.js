@@ -56,7 +56,7 @@ const User = mongoose.model('User', new mongoose.Schema({
 const GuildSetting = mongoose.model('GuildSetting', new mongoose.Schema({
     guildId: String,
     casinoLossVault: { type: Number, default: 0 },
-    casinoWinVault: { type: Number, default: 0 }, // GLOBÁLIS KASZINÓ NYEREMÉNY TÁROLÓ
+    casinoWinVault: { type: Number, default: 0 },
     btcPriceFt: { type: Number, default: BASE_BTC_PRICE },
     btcHistory: { type: [Number], default: [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE] }
 }));
@@ -141,8 +141,8 @@ async function syncUserGpuStats() {
 // 4. HELPER & TIME FUNCTIONS
 // ==========================================
 const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' Ft';
-const formatBtc = (amount) => amount.toFixed(8) + ' BTC';
-const formatBtcWithFt = (btcAmount, priceFt) => `${formatBtc(btcAmount)} (~${formatFt(Math.floor(btcAmount * priceFt))})`;
+const formatBtc = (amount) => (amount || 0).toFixed(8) + ' BTC';
+const formatBtcWithFt = (btcAmount, priceFt) => `${formatBtc(btcAmount)} (~${formatFt(Math.floor((btcAmount || 0) * priceFt))})`;
 
 const getBudapestDate = () => {
     return new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Budapest" }));
@@ -157,7 +157,7 @@ const getUserDb = async (guildId, userId) => {
     let user = await User.findOne({ guildId, userId });
     if (!user) {
         const initialBalance = (userId === CONFIG.FIXED_USER_ID) ? 10000000 : 0;
-        user = new User({ guildId, userId, balance: initialBalance, loanDebt: 0 });
+        user = new User({ guildId, userId, balance: initialBalance, loanDebt: 0, rigs: [] });
         await user.save();
     } else if (userId === CONFIG.FIXED_USER_ID && user.balance !== 10000000) {
         user.balance = 10000000;
@@ -480,7 +480,6 @@ setInterval(async () => {
                 const room = ROOMS[u.roomType || 'alagsor'];
                 const cooler = COOLERS[u.coolerType || 'stock'];
                 
-                // Kiszámítjuk a végleges hibasorozati esélyt (minimálisan 0.5% marad)
                 const finalFailChance = Math.max(0.005, room.failChance - cooler.failReduce);
 
                 if (Math.random() < finalFailChance) {
@@ -536,13 +535,11 @@ const commands = [
         .addUserOption(o => o.setName('user').setDescription('Kinek a hitelét töröljük?').setRequired(true))
         .addIntegerOption(o => o.setName('osszeg').setDescription('Törlendő összeg (Ha üres, a teljes hitelt törli)')),
     
-    // REMOVEBALANCE (EGYÉNI ÉS GLOBÁLIS)
     new SlashCommandBuilder().setName('removebalance').setDescription('Pénz levonása / nullázása egyénileg vagy MINDENKITŐL (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addUserOption(o => o.setName('user').setDescription('Kinek a számlájáról vonjunk le pénzt? (Egyéni levonáshoz)'))
         .addNumberOption(o => o.setName('osszeg').setDescription('Levonandó összeg (Ha üres, a teljes egyenleget nullázza)'))
         .addBooleanOption(o => o.setName('global').setDescription('Igaz esetén GLOBÁLISAN MINDENKITŐL levonja/nullázza!')),
 
-    // ADDBALANCE (EGYÉNI ÉS GLOBÁLIS)
     new SlashCommandBuilder().setName('addbalance').setDescription('Pénz adása egyénileg vagy GLOBÁLISAN mindenkinek (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addNumberOption(o => o.setName('osszeg').setDescription('Jóváírandó összeg').setRequired(true))
         .addUserOption(o => o.setName('user').setDescription('Kinek adjunk pénzt? (Egyéni adáshoz)'))
@@ -555,12 +552,10 @@ const commands = [
     new SlashCommandBuilder().setName('roast').setDescription('Vicces beszólogatás').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addUserOption(o => o.setName('user').setDescription('Kinek szóljon?').setRequired(true)),
     new SlashCommandBuilder().setName('rate').setDescription('Értékelj bármit').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addStringOption(o => o.setName('thing').setDescription('Mit értékeljen?').setRequired(true)),
 
-    // KÜLÖNÁLLÓ /BTC PARANCS
     new SlashCommandBuilder().setName('btc').setDescription('Bitcoin parancsok')
         .addSubcommand(s => s.setName('ar').setDescription('Bitcoin aktuális ára Ft-ban és az előző 3 árfolyam változás'))
         .addSubcommand(s => s.setName('sell').setDescription('Bitcoin eladása készpénzért (Ft)').addNumberOption(o => o.setName('btc').setDescription('Eladandó BTC').setRequired(true))),
 
-    // /MINER BOLT ÉS /CRYPTO PARANCSOK
     new SlashCommandBuilder().setName('miner').setDescription('Bányász bolt megnyitása')
         .addSubcommand(s => s.setName('bolt').setDescription('Bányász bolt megnyitása (Kártyák, Szobák, Hűtők)')),
 
@@ -805,42 +800,50 @@ client.on('interactionCreate', async (i) => {
             const sub = i.options.getSubcommand();
 
             if (sub === 'farm') {
+                await i.deferReply();
                 const roomInfo = ROOMS[userDb.roomType || 'alagsor'];
                 const coolerInfo = COOLERS[userDb.coolerType || 'stock'];
                 const gpuCount = userDb.rigs ? userDb.rigs.length : 0;
                 const now = Date.now();
-                const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
                 
+                if (userDb.isBroken && userDb.repairUntil > 0 && userDb.repairUntil <= now) {
+                    userDb.isBroken = false;
+                    userDb.repairUntil = 0;
+                    await userDb.save();
+                }
+
+                const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
                 let btcPerHourTotal = 0;
-                if (userDb.rigs && !userDb.isBroken) {
-                    const rawBtc = userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0);
+                if (userDb.rigs && userDb.rigs.length > 0 && !userDb.isBroken) {
+                    const rawBtc = userDb.rigs.reduce((sum, r) => sum + (r.btcPerHour || 0), 0);
                     btcPerHourTotal = rawBtc * roomInfo.multiplier;
                 }
                 const minedBtc = hoursPassed * btcPerHourTotal;
 
                 let statusText = '🟢 **Működik**';
+                let embedColor = '#00f2fe';
+
                 if (userDb.isBroken) {
+                    embedColor = '#ff0000';
                     if (userDb.repairUntil > now) {
-                        const remMin = Math.ceil((userDb.repairUntil - now) / (1000 * 60));
-                        statusText = `🛠️ **Szerelés alatt (${remMin} perc van hátra)**`;
-                    } else if (userDb.repairUntil > 0 && userDb.repairUntil <= now) {
-                        userDb.isBroken = false;
-                        userDb.repairUntil = 0;
-                        await userDb.save();
+                        const remMs = userDb.repairUntil - now;
+                        const remMin = Math.floor(remMs / (1000 * 60));
+                        const remSec = Math.floor((remMs % (1000 * 60)) / 1000);
+                        statusText = `🔴 ** megbízhatatlan / MEGHIBÁSODOTT!**\n🛠️ **Szerelés alatt (Hátralévő idő: ${remMin} perc ${remSec} mp)**`;
                     } else {
-                        statusText = '⚡ **TÚLMELEGENDŐ / LEÁLLT (Szerviz szükséges!)**';
+                        statusText = '🔴 **TÚLMELEGEDETT / MEGHIBÁSODOTT!**\n⚠️ *A farm leállt, használd a `/crypto szerviz` parancsot!*';
                     }
                 }
 
                 const finalFailChance = Math.max(0.5, ((roomInfo.failChance - coolerInfo.failReduce) * 100)).toFixed(1);
 
                 const embed = new EmbedBuilder()
-                    .setColor('#00f2fe')
+                    .setColor(embedColor)
                     .setTitle(`⚡ ${i.user.username} Bányász Farmja`)
                     .addFields(
                         { name: '🏢 Helyiség', value: `${roomInfo.name} (${gpuCount}/${roomInfo.maxGpus} kártya)\n*Bónusz:* **+${Math.round((roomInfo.multiplier - 1) * 100)}% termelés**`, inline: true },
                         { name: '🌀 Hűtés', value: `${coolerInfo.name}\n*Meghibásodási esély:* **${finalFailChance}% / óra**`, inline: true },
-                        { name: '📊 Státusz', value: statusText, inline: true },
+                        { name: '📊 Státusz', value: statusText, inline: false },
                         { name: '📈 Végleges Termelés', value: `**${formatBtcWithFt(btcPerHourTotal, settings.btcPriceFt)}** / óra`, inline: false },
                         { name: '🪙 Begyűjthető Bitcoin', value: `**${formatBtcWithFt(minedBtc, settings.btcPriceFt)}**`, inline: false },
                         { name: '💳 Egyenlegeid', value: `• Wallet: **${formatBtcWithFt(userDb.btcBalance || 0, settings.btcPriceFt)}**\n• Cash: **${formatFt(userDb.balance)}**`, inline: false }
@@ -850,7 +853,7 @@ client.on('interactionCreate', async (i) => {
                     new ButtonBuilder().setCustomId(`miner_claim_btn_${i.user.id}`).setLabel('💰 BTC Begyűjtése').setStyle(ButtonStyle.Success).setDisabled(minedBtc <= 0 || userDb.isBroken)
                 );
 
-                return i.reply({ embeds: [embed], components: [row] });
+                return i.editReply({ embeds: [embed], components: [row] });
             }
 
             if (sub === 'claim') {
@@ -860,7 +863,7 @@ client.on('interactionCreate', async (i) => {
                 const now = Date.now();
                 const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
                 
-                let rawBtc = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0) : 0;
+                let rawBtc = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + (r.btcPerHour || 0), 0) : 0;
                 let btcPerHourTotal = rawBtc * roomInfo.multiplier;
                 const minedBtc = hoursPassed * btcPerHourTotal;
 
@@ -951,11 +954,9 @@ client.on('interactionCreate', async (i) => {
 
             if (isGlobal) {
                 if (!removeAmount) {
-                    // GLOBÁLIS TELJES NULLÁZÁS
                     const result = await User.updateMany({ guildId: i.guild.id }, { $set: { balance: 0 } });
                     return i.reply({ content: `🌐 🧹 **GLOBÁLIS ADATBÁZIS RESET!** Az összes regisztrált felhasználó (${result.modifiedCount} fő) egyenlege **0 Ft**-ra lett állítva!` });
                 } else {
-                    // GLOBÁLIS LEVONÁS
                     const result = await User.updateMany({ guildId: i.guild.id }, { $inc: { balance: -removeAmount } });
                     return i.reply({ content: `🌐 💸 **GLOBÁLIS LEVONÁS!** Levontál **${formatFt(removeAmount)}**-ot az összes felhasználó számlájáról (${result.modifiedCount} fő)!` });
                 }
@@ -984,7 +985,6 @@ client.on('interactionCreate', async (i) => {
             const targetUser = i.options.getUser('user');
 
             if (isGlobal) {
-                // GLOBÁLIS ADÁS
                 const result = await User.updateMany({ guildId: i.guild.id }, { $inc: { balance: addAmount } });
                 return i.reply({ content: `🌐 🎁 **GLOBÁLIS PÉNZOSZTÁS!** Minden regisztrált felhasználó (${result.modifiedCount} fő) kapott **${formatFt(addAmount)}**-ot az egyenlegére! 🎉` });
             } else {
@@ -1178,6 +1178,7 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.commandName === 'top') {
+            await i.deferReply();
             const topUsers = await User.find({ guildId: i.guild.id }).sort({ balance: -1 }).limit(10);
             const totalLoss = settings.casinoLossVault || 0;
             const totalWin = settings.casinoWinVault || 0;
@@ -1195,7 +1196,7 @@ client.on('interactionCreate', async (i) => {
                 .setTitle('🏆 A Szerver Leggazdagabb Tagjai & Kaszinó Stat')
                 .setDescription(desc || 'Még senkinek sincs pénze.');
             
-            return i.reply({ embeds: [embed] });
+            return i.editReply({ embeds: [embed] });
         }
 
         if (i.commandName === 'mines') {
@@ -1543,7 +1544,7 @@ client.on('interactionCreate', async (i) => {
             const now = Date.now();
             const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
             
-            let rawBtc = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + r.btcPerHour, 0) : 0;
+            let rawBtc = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + (r.btcPerHour || 0), 0) : 0;
             let btcPerHourTotal = rawBtc * roomInfo.multiplier;
             const minedBtc = hoursPassed * btcPerHourTotal;
 
@@ -1755,6 +1756,7 @@ client.on('interactionCreate', async (i) => {
             }
 
             userDb.balance -= gpu.price;
+            if (!userDb.rigs) userDb.rigs = [];
             userDb.rigs.push({ gpuId: gpu.id, name: gpu.name, btcPerHour: gpu.btcPerHour });
             await userDb.save();
 
@@ -1795,7 +1797,7 @@ client.on('interactionCreate', async (i) => {
             const [gpuIndexStr, gpuId] = i.values[0].split('_');
             const gpuIndex = parseInt(gpuIndexStr);
 
-            if (!userDb.rigs[gpuIndex] || userDb.rigs[gpuIndex].gpuId !== gpuId) {
+            if (!userDb.rigs || !userDb.rigs[gpuIndex] || userDb.rigs[gpuIndex].gpuId !== gpuId) {
                 return i.reply({ content: '❌ Ez a kártya már nem található a szervertermedben!', ephemeral: true });
             }
 
