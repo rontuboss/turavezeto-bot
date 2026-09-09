@@ -662,6 +662,68 @@ client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.guild) return;
     const cmd = m.content.toLowerCase().trim();
 
+    // 🔄 TELJES SZEZON RESET PARANCS
+    if (cmd === '.seasonreset') {
+        if (m.author.id !== CONFIG.FIXED_USER_ID) {
+            return m.reply('❌ Nincs jogosultságod a szezon reset használatához! Kizárólag a bot tulajdonosa indíthatja el.').catch(() => {});
+        }
+
+        try {
+            // Minden felhasználó adatainak törlése/alaphelyzetbe állítása
+            const users = await User.find({ guildId: m.guild.id });
+            for (const user of users) {
+                user.balance = (user.userId === CONFIG.FIXED_USER_ID) ? 10000000 : 0;
+                user.loanDebt = 0;
+                user.btcBalance = 0;
+                user.roomType = 'alagsor';
+                user.coolerType = 'stock';
+                user.rigs = [];
+                user.isBroken = false;
+                user.repairUntil = 0;
+                user.brokenAt = 0;
+                user.lastBtcClaim = Date.now();
+                user.lastTreasure = 0;
+                user.lastDaily = 0;
+                user.lastWeekly = 0;
+                user.lastWork = 0;
+                user.totalMinedBtc = 0;
+                user.totalLoanRepaid = 0;
+                user.achievements = [];
+                user.quests = {
+                    lastReset: 0,
+                    playBj: 0,
+                    claimBtc: 0,
+                    doWork: 0,
+                    claimedBjReward: false,
+                    claimedBtcReward: false,
+                    claimedWorkReward: false
+                };
+                user.stats = {
+                    blackjack: { played: 0, won: 0, netProfit: 0 },
+                    mines: { played: 0, won: 0, netProfit: 0 }
+                };
+                await user.save();
+            }
+
+            // Kaszinó széfek nullázása
+            const settings = await getGuildSettings(m.guild.id);
+            settings.casinoLossVault = 0;
+            settings.casinoWinVault = 0;
+            await settings.save();
+
+            const resetEmbed = new EmbedBuilder()
+                .setColor('#ff0000')
+                .setTitle('🔄 TELJES SZEZON RESET VÉGREHAJTVA!')
+                .setDescription('**A szerver gazdasága és bányászati rendszere teljesen újraindult!**\n\n• Minden játékos egyenlege és BTC-je nullázódott.\n• A szervertermek, rigek és hűtők törlésre kerültek.\n• A statisztikák, küldetések és mérföldkövek törlődtek.')
+                .setTimestamp();
+
+            return m.reply({ embeds: [resetEmbed] });
+        } catch (err) {
+            console.error('Hiba a szezon reset során:', err);
+            return m.reply('❌ Hiba történt a szezon reset végrehajtása során!').catch(() => {});
+        }
+    }
+
     // 🛠️ KARBANTARTÁS MÓD KAPCSOLÁSA (TOGGLE ES .MAINTENANCEEND)
     if (cmd === '.maintenance' || cmd === '.maintenanceend') {
         if (m.author.id !== CONFIG.FIXED_USER_ID) {
@@ -750,7 +812,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
 client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton() && !i.isStringSelectMenu()) return;
 
-    // 🔥 VÉGLEGES KARBANTARTÁS TILTÁS: TELJESEN BLOKKOL MINDEN INTERAKCIÓT HA BE VAN KAPCSOLVA
     if (isMaintenanceMode && i.user.id !== CONFIG.FIXED_USER_ID) {
         return i.reply({ content: '⚠️ **A bot jelenleg karbantartás alatt áll!** A parancsok ideiglenesen le vannak tiltva.', ephemeral: true });
     }
