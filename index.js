@@ -19,7 +19,7 @@ const CONFIG = {
     BOOSTER_ROLE: '1449473778386997311',
     STAFF_ROLE: '1436671411178569832',
     MEMBER_ROLE: '1486847637134246139',
-    FIXED_USER_ID: '1127950309247942797' // 👑 Kizárólag a te Discord ID-d használhatja a .maintenance-t
+    FIXED_USER_ID: '1127950309247942797' // 👑 Fejlesztő / Tulajdonos ID
 };
 
 const BASE_BTC_PRICE = 35000000;
@@ -497,7 +497,6 @@ setInterval(async () => {
                 }
             }
 
-            // MEGHIBÁSODÁSOK LEKEZELÉSE (MEGŐRZI A MEGKERESETT BTC-T)
             const users = await User.find({ "rigs.0": { $exists: true }, isBroken: false });
             for (const u of users) {
                 const room = ROOMS[u.roomType || 'alagsor'];
@@ -514,7 +513,7 @@ setInterval(async () => {
 
                     u.isBroken = true;
                     u.brokenAt = now;
-                    u.lastBtcClaim = now; // Megállítja az órát a hiba pillanatában
+                    u.lastBtcClaim = now;
 
                     if (accruedBtc > 0) {
                         u.btcBalance = (u.btcBalance || 0) + accruedBtc;
@@ -572,7 +571,6 @@ const commands = [
         .addNumberOption(o => o.setName('osszeg').setDescription('Összeg'))
         .addBooleanOption(o => o.setName('global').setDescription('Globális-e')),
     
-    // 🔥 UTALÁS / JÓVÁÍRÁS BŐVÍTÉSE: PÉNZNEM OPCIÓ
     new SlashCommandBuilder().setName('addbalance').setDescription('Pénz vagy BTC adása (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addNumberOption(o => o.setName('osszeg').setDescription('Összeg (Ft vagy BTC)').setRequired(true))
         .addStringOption(o => o.setName('currency').setDescription('Pénznem kiválasztása').addChoices(
@@ -664,12 +662,18 @@ client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.guild) return;
     const cmd = m.content.toLowerCase().trim();
 
-    if (cmd === '.maintenance') {
+    // 🛠️ KARBANTARTÁS MÓD KAPCSOLÁSA (TOGGLE ES .MAINTENANCEEND)
+    if (cmd === '.maintenance' || cmd === '.maintenanceend') {
         if (m.author.id !== CONFIG.FIXED_USER_ID) {
             return m.reply('❌ Nincs jogosultságod a karbantartás mód használatához! Kizárólag a bot tulajdonosa indíthatja el.').catch(() => {});
         }
 
-        isMaintenanceMode = !isMaintenanceMode;
+        if (cmd === '.maintenanceend') {
+            isMaintenanceMode = false;
+        } else {
+            isMaintenanceMode = !isMaintenanceMode;
+        }
+
         updateStatus(m.guild);
         return m.reply(isMaintenanceMode ? '🛠️ **KARBANTARTÁS MÓD BEKAPCSOLVA!** A felhasználók elől a parancsok zárolva lettek.' : '✅ **KARBANTARTÁS MÓD KIKAPCSOLVA!** A bot újra használható mindenkinek.').catch(() => {});
     }
@@ -746,8 +750,9 @@ client.on('messageReactionAdd', async (reaction, user) => {
 client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton() && !i.isStringSelectMenu()) return;
 
+    // 🔥 VÉGLEGES KARBANTARTÁS TILTÁS: TELJESEN BLOKKOL MINDEN INTERAKCIÓT HA BE VAN KAPCSOLVA
     if (isMaintenanceMode && i.user.id !== CONFIG.FIXED_USER_ID) {
-        return i.reply({ content: '⚠️ **A bot jelenleg karbantartás alatt áll!** Kérjük, próbáld meg később.', ephemeral: true });
+        return i.reply({ content: '⚠️ **A bot jelenleg karbantartás alatt áll!** A parancsok ideiglenesen le vannak tiltva.', ephemeral: true });
     }
 
     if (i.isChatInputCommand()) {
@@ -959,14 +964,13 @@ client.on('interactionCreate', async (i) => {
                 return i.reply({ embeds: [embed], components: [row], ephemeral: true });
             }
 
-            // 🔧 SZERVIZ MODIFIKÁCIÓ: 30 PERCES JAVÍTÁSI IDŐ
             if (sub === 'szerviz') {
                 if (!userDb.isBroken) return i.reply({ content: '✅ A szervertermednek semmi baja!', ephemeral: true });
                 if (userDb.repairUntil > Date.now()) return i.reply({ content: '⏳ A szerelés már folyamatban van!', ephemeral: true });
                 if (userDb.balance < 100000) return i.reply({ content: '❌ Nincs elég pénzed a szervizre! (Ára: 100 000 Ft)', ephemeral: true });
 
                 userDb.balance -= 100000;
-                userDb.repairUntil = Date.now() + (30 * 60 * 1000); // 30 PERC JAVÍTÁSI IDŐ
+                userDb.repairUntil = Date.now() + (30 * 60 * 1000);
                 await userDb.save();
 
                 return i.reply({ content: '🔧 **Szerviz elindítva!** A szerverterem **30 perc múlva** újra működni fog!', ephemeral: true });
@@ -1028,12 +1032,11 @@ client.on('interactionCreate', async (i) => {
             }
         }
 
-        // 💵/🪙 /ADDBALANCE MODIFIKÁCIÓ (PÉNZNEM OPCIÓ)
         if (i.commandName === 'addbalance') {
             if (!isStaff) return i.reply({ content: '❌ Nincs jogosultságod ehhez a parancshoz!', ephemeral: true });
 
             const addAmount = i.options.getNumber('osszeg');
-            const currency = i.options.getString('currency') || 'ft'; // Alapértelmezett Ft
+            const currency = i.options.getString('currency') || 'ft';
             const isGlobal = i.options.getBoolean('global') || false;
             const targetUser = i.options.getUser('user');
 
