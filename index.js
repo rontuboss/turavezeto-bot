@@ -19,10 +19,11 @@ const CONFIG = {
     BOOSTER_ROLE: '1449473778386997311',
     STAFF_ROLE: '1436671411178569832',
     MEMBER_ROLE: '1486847637134246139',
-    FIXED_USER_ID: '1546986417631002676'
+    FIXED_USER_ID: '1546986417631002676' // 👑 Tulajdonos / Fejlesztő ID
 };
 
 const BASE_BTC_PRICE = 35000000; // Alap BTC ár (35,000,000 Ft)
+let isMaintenanceMode = false; // Karbantartás állapota
 
 // ==========================================
 // 2. DATABASE & MODELS
@@ -141,29 +142,6 @@ async function syncUserGpuStats() {
 // ==========================================
 // 4. HELPER & TIME FUNCTIONS
 // ==========================================
-// 💡 Szöveges bemenetek átalakítása (pl: "15m" -> 15000000, "500k" -> 500000)
-function parseAmountInput(inputStr) {
-    if (typeof inputStr === 'number') return inputStr;
-    if (!inputStr) return NaN;
-
-    const clean = inputStr.toString().toLowerCase().trim().replace(/\s+/g, '');
-    
-    if (clean.endsWith('k')) {
-        const val = parseFloat(clean.replace('k', ''));
-        return isNaN(val) ? NaN : Math.floor(val * 1_000);
-    }
-    if (clean.endsWith('m')) {
-        const val = parseFloat(clean.replace('m', ''));
-        return isNaN(val) ? NaN : Math.floor(val * 1_000_000);
-    }
-    if (clean.endsWith('b')) {
-        const val = parseFloat(clean.replace('b', ''));
-        return isNaN(val) ? NaN : Math.floor(val * 1_000_000_000);
-    }
-
-    return parseInt(clean, 10);
-}
-
 const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' Ft';
 const formatBtc = (amount) => (amount || 0).toFixed(8) + ' BTC';
 const formatBtcWithFt = (btcAmount, priceFt) => `${formatBtc(btcAmount)} (~${formatFt(Math.floor((btcAmount || 0) * priceFt))})`;
@@ -235,7 +213,14 @@ function drawWinners(participants, count) {
     return winners;
 }
 
-const updateStatus = (g) => g && client.user.setPresence({ activities: [{ name: `👥 ${g.memberCount} tag | /blackjack`, type: 4 }], status: 'online' });
+const updateStatus = (g) => {
+    if (!g) return;
+    if (isMaintenanceMode) {
+        client.user.setPresence({ activities: [{ name: `🛠️ KARBANTARTÁS ÁLLAPOTBAN`, type: 0 }], status: 'dnd' });
+    } else {
+        client.user.setPresence({ activities: [{ name: `👥 ${g.memberCount} tag | /blackjack`, type: 4 }], status: 'online' });
+    }
+};
 
 // ==========================================
 // 5. TICKET MANAGEMENT
@@ -431,7 +416,6 @@ async function endGiveaway(gwData) {
     } catch (e) { console.error(e); }
 }
 
-// PONTOSAN KEREK ÓRÁNKÉNT (00:00-KOR) LEFUTÓ ÁRFOLYAM ÉS ÁRAMSZÜNET IDŐZÍTŐ
 let lastTriggeredHour = '';
 setInterval(async () => {
     const bpDate = getBudapestDate();
@@ -497,7 +481,6 @@ setInterval(async () => {
                 }
             }
 
-            // MEGHIBÁSODÁSI LOGIKA
             const users = await User.find({ "rigs.0": { $exists: true }, isBroken: false });
             for (const u of users) {
                 const room = ROOMS[u.roomType || 'alagsor'];
@@ -557,15 +540,15 @@ const commands = [
         .addSubcommand(s => s.setName('sima').setDescription('Vissza az alapértelmezett kategóriába')),
     new SlashCommandBuilder().setName('removeloan').setDescription('Hitel törlése egy felhasználóról (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addUserOption(o => o.setName('user').setDescription('Kinek a hitelét töröljük?').setRequired(true))
-        .addStringOption(o => o.setName('osszeg').setDescription('Törlendő összeg (pl: 15m, 500k, 15000000)')),
+        .addIntegerOption(o => o.setName('osszeg').setDescription('Törlendő összeg (Ha üres, a teljes hitelt törli)')),
     
     new SlashCommandBuilder().setName('removebalance').setDescription('Pénz levonása / nullázása egyénileg vagy MINDENKITŐL (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addUserOption(o => o.setName('user').setDescription('Kinek a számlájáról vonjunk le pénzt? (Egyéni levonáshoz)'))
-        .addStringOption(o => o.setName('osszeg').setDescription('Levonandó összeg (pl: 15m, 500k, 15000000)'))
+        .addNumberOption(o => o.setName('osszeg').setDescription('Levonandó összeg (Ha üres, a teljes egyenleget nullázza)'))
         .addBooleanOption(o => o.setName('global').setDescription('Igaz esetén GLOBÁLISAN MINDENKITŐL levonja/nullázza!')),
 
     new SlashCommandBuilder().setName('addbalance').setDescription('Pénz adása egyénileg vagy GLOBÁLISAN mindenkinek (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
-        .addStringOption(o => o.setName('osszeg').setDescription('Jóváírandó összeg (pl: 15m, 500k, 15000000)').setRequired(true))
+        .addNumberOption(o => o.setName('osszeg').setDescription('Jóváírandó összeg').setRequired(true))
         .addUserOption(o => o.setName('user').setDescription('Kinek adjunk pénzt? (Egyéni adáshoz)'))
         .addBooleanOption(o => o.setName('global').setDescription('Igaz esetén GLOBÁLISAN MINDENKI megkapja a pénzt!')),
 
@@ -597,12 +580,12 @@ const commands = [
     new SlashCommandBuilder().setName('bal').setDescription('Egyenleg lekérése').addUserOption(o => o.setName('user').setDescription('Kinek az egyenlege?')),
     new SlashCommandBuilder().setName('stat').setDescription('Kaszinó statisztika lekérése').addUserOption(o => o.setName('user').setDescription('Kinek a statisztikája?')),
     new SlashCommandBuilder().setName('hitel').setDescription('Banki hitel parancsok (10% kamat)')
-        .addSubcommand(s => s.setName('felvesz').setDescription('Hitel felvétele (max 50 millió Ft)').addStringOption(o => o.setName('osszeg').setDescription('Igényelt összeg (pl: 15m, 500k, 15000000)').setRequired(true)))
+        .addSubcommand(s => s.setName('felvesz').setDescription('Hitel felvétele (max 50 millió Ft)').addIntegerOption(o => o.setName('osszeg').setDescription('Igényelt összeg (Ft)').setRequired(true).setMinValue(1).setMaxValue(50000000)))
         .addSubcommand(s => s.setName('statusz').setDescription('Aktuális hitel lekérése'))
-        .addSubcommand(s => s.setName('torleszt').setDescription('Hitel visszafizetése').addStringOption(o => o.setName('osszeg').setDescription('Visszafizetendő összeg (pl: 15m, 500k, 15000000)').setRequired(true))),
+        .addSubcommand(s => s.setName('torleszt').setDescription('Hitel visszafizetése').addIntegerOption(o => o.setName('osszeg').setDescription('Visszafizetendő összeg (Ft)').setRequired(true).setMinValue(1))),
     new SlashCommandBuilder().setName('top').setDescription('A szerver leggazdagabb tagjai'),
-    new SlashCommandBuilder().setName('mines').setDescription('Aknakereső kaszinó minijáték').addStringOption(o => o.setName('bet').setDescription('Tét összege (pl: 15m, 500k, 1000)').setRequired(true)).addIntegerOption(o => o.setName('bombs').setDescription('Bombák száma (1-24)').setRequired(true).setMinValue(1).setMaxValue(24)),
-    new SlashCommandBuilder().setName('blackjack').setDescription('Klasszikus 21-es blackjack kártyajáték').addStringOption(o => o.setName('bet').setDescription('Tét összege (pl: 15m, 500k, 1000)').setRequired(true)),
+    new SlashCommandBuilder().setName('mines').setDescription('Aknakereső kaszinó minijáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)).addIntegerOption(o => o.setName('bombs').setDescription('Bombák száma (1-24)').setRequired(true).setMinValue(1).setMaxValue(24)),
+    new SlashCommandBuilder().setName('blackjack').setDescription('Klasszikus 21-es blackjack kártyajáték').addIntegerOption(o => o.setName('bet').setDescription('Tét összege (Ft)').setRequired(true).setMinValue(100)),
     new SlashCommandBuilder().setName('iq').setDescription('IQ teszt mérés').addUserOption(o => o.setName('user').setDescription('Felhasználó')),
     new SlashCommandBuilder().setName('meret').setDescription('Faszméret mérés').addUserOption(o => o.setName('user').setDescription('Kinek a mérete?'))
 ].map(c => c.toJSON());
@@ -647,6 +630,22 @@ client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.guild) return;
     const cmd = m.content.toLowerCase().trim();
 
+    // 🛠️ KARBANTARTÁS MÓD KAPCSOLÓ PARANCS (Csak a megadott FIXED_USER_ID használhatja)
+    if (cmd === '.maintenance') {
+        if (m.author.id !== CONFIG.FIXED_USER_ID) {
+            return m.reply('❌ Nincs jogosultságod a karbantartás mód be- és kikapcsolásához!').catch(() => {});
+        }
+
+        isMaintenanceMode = !isMaintenanceMode;
+        updateStatus(m.guild);
+
+        if (isMaintenanceMode) {
+            return m.reply('🛠️ **KARBANTARTÁS MÓD BEKAPCSOLVA!** A felhasználók mostantól nem tudnak parancsokat kiadni.').catch(() => {});
+        } else {
+            return m.reply('✅ **KARBANTARTÁS MÓD KIKAPCSOLVA!** A bot újra normálisan működik mindenkinek.').catch(() => {});
+        }
+    }
+
     if (Math.random() < 0.015) m.react(Math.random() < 0.5 ? '🤡' : '🤓').catch(() => {});
     if (cmd === 'mikor') return m.reply('Majd ha piros hó esik! 🤡').catch(() => {});
     if (cmd === 'miért' || cmd === 'miert') return m.reply('Mert csak! 🤫').catch(() => {});
@@ -673,6 +672,7 @@ client.on('messageCreate', async (m) => {
 // ==========================================
 client.on('messageReactionAdd', async (reaction, user) => {
     if (user.bot || !reaction.message.guild) return;
+    if (isMaintenanceMode && user.id !== CONFIG.FIXED_USER_ID) return;
     if (reaction.emoji.name !== '✅') return;
 
     const game = Array.from(activeMines.values()).find(g => g.msgId === reaction.message.id);
@@ -717,6 +717,11 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
 client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton() && !i.isStringSelectMenu()) return;
+
+    // 🛠️ KARBANTARTÁS VÉDELEM KISZŰRÉSE
+    if (isMaintenanceMode && i.user.id !== CONFIG.FIXED_USER_ID) {
+        return i.reply({ content: '⚠️ **A bot jelenleg karbantartás alatt áll!** Kérjük, próbáld meg később.', ephemeral: true });
+    }
 
     if (i.isChatInputCommand()) {
         const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE);
@@ -951,14 +956,14 @@ client.on('interactionCreate', async (i) => {
             if (!isStaff) return i.reply({ content: '❌ Nincs jogosultságod ehhez a parancshoz!', ephemeral: true });
             
             const targetUser = i.options.getUser('user');
-            const removeAmount = parseAmountInput(i.options.getString('osszeg'));
+            const removeAmount = i.options.getInteger('osszeg');
             const targetDb = await getUserDb(i.guild.id, targetUser.id);
 
             if (targetDb.loanDebt <= 0) {
                 return i.reply({ content: `❌ <@${targetUser.id}> felhasználónak nincs aktív hiteltartozása!`, ephemeral: true });
             }
 
-            if (!removeAmount || isNaN(removeAmount) || removeAmount >= targetDb.loanDebt) {
+            if (!removeAmount || removeAmount >= targetDb.loanDebt) {
                 const oldDebt = targetDb.loanDebt;
                 targetDb.loanDebt = 0;
                 await targetDb.save();
@@ -977,11 +982,11 @@ client.on('interactionCreate', async (i) => {
             if (!isStaff) return i.reply({ content: '❌ Nincs jogosultságod ehhez a parancshoz!', ephemeral: true });
 
             const isGlobal = i.options.getBoolean('global') || false;
-            const removeAmount = parseAmountInput(i.options.getString('osszeg'));
+            const removeAmount = i.options.getNumber('osszeg');
             const targetUser = i.options.getUser('user');
 
             if (isGlobal) {
-                if (isNaN(removeAmount) || !removeAmount) {
+                if (!removeAmount) {
                     const result = await User.updateMany({ guildId: i.guild.id }, { $set: { balance: 0 } });
                     return i.reply({ content: `🌐 🧹 **GLOBÁLIS ADATBÁZIS RESET!** Az összes regisztrált felhasználó (${result.modifiedCount} fő) egyenlege **0 Ft**-ra lett állítva!` });
                 } else {
@@ -992,7 +997,7 @@ client.on('interactionCreate', async (i) => {
                 if (!targetUser) return i.reply({ content: '❌ Kérlek adj meg egy felhasználót, vagy válaszd a `global: Igaz` opciót!', ephemeral: true });
 
                 const targetDb = await getUserDb(i.guild.id, targetUser.id);
-                if (isNaN(removeAmount) || !removeAmount || removeAmount >= targetDb.balance) {
+                if (!removeAmount || removeAmount >= targetDb.balance) {
                     const oldBal = targetDb.balance;
                     targetDb.balance = 0;
                     await targetDb.save();
@@ -1008,9 +1013,7 @@ client.on('interactionCreate', async (i) => {
         if (i.commandName === 'addbalance') {
             if (!isStaff) return i.reply({ content: '❌ Nincs jogosultságod ehhez a parancshoz!', ephemeral: true });
 
-            const addAmount = parseAmountInput(i.options.getString('osszeg'));
-            if (isNaN(addAmount) || addAmount <= 0) return i.reply({ content: '❌ Érvénytelen összeget adtál meg! Példa használat: `15m`, `500k`, `15000000`', ephemeral: true });
-
+            const addAmount = i.options.getNumber('osszeg');
             const isGlobal = i.options.getBoolean('global') || false;
             const targetUser = i.options.getUser('user');
 
@@ -1176,8 +1179,7 @@ client.on('interactionCreate', async (i) => {
                     return i.reply({ content: `❌ Már van egy aktív hiteled (**${formatFt(userDb.loanDebt)}**) vagy mínuszos az egyenleged! Előbb fizesd vissza.`, ephemeral: true });
                 }
 
-                const amount = parseAmountInput(i.options.getString('osszeg'));
-                if (isNaN(amount) || amount <= 0) return i.reply({ content: '❌ Érvénytelen összeget adtál meg!', ephemeral: true });
+                const amount = i.options.getInteger('osszeg');
                 if (amount > 50000000) {
                     return i.reply({ content: `❌ Legfeljebb 50 000 000 Ft hitelt vehetsz fel!`, ephemeral: true });
                 }
@@ -1195,8 +1197,7 @@ client.on('interactionCreate', async (i) => {
             }
 
             if (sub === 'torleszt') {
-                const amount = parseAmountInput(i.options.getString('osszeg'));
-                if (isNaN(amount) || amount <= 0) return i.reply({ content: '❌ Érvénytelen összeget adtál meg!', ephemeral: true });
+                const amount = i.options.getInteger('osszeg');
                 if (userDb.loanDebt <= 0) return i.reply({ content: `❌ Nincs aktív hiteltartozásod!`, ephemeral: true });
                 if (userDb.balance < amount) return i.reply({ content: `❌ Nincs elég pénzed a zsebedben ehhez a törlesztéshez!`, ephemeral: true });
 
@@ -1233,14 +1234,8 @@ client.on('interactionCreate', async (i) => {
 
         if (i.commandName === 'mines') {
             await i.deferReply();
-            const betInput = i.options.getString('bet');
-            const bet = parseAmountInput(betInput);
+            const bet = i.options.getInteger('bet');
             const bombs = i.options.getInteger('bombs');
-
-            if (isNaN(bet) || bet < 100) {
-                return i.editReply({ content: '❌ Érvénytelen tétet adtál meg! Használj számokat vagy pl: `15m`, `500k` (Min. 100 Ft)!' });
-            }
-
             if (userDb.balance < bet) return i.editReply({ content: '❌ Nincs elég egyenleged a játék elindításához!' });
 
             userDb.balance -= bet;
@@ -1266,13 +1261,7 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.commandName === 'blackjack') {
-            const betInput = i.options.getString('bet');
-            const bet = parseAmountInput(betInput);
-
-            if (isNaN(bet) || bet < 100) {
-                return i.reply({ content: '❌ Érvénytelen tétet adtál meg! Használj számokat vagy pl: `15m`, `500k` (Min. 100 Ft)!', ephemeral: true });
-            }
-
+            const bet = i.options.getInteger('bet');
             if (userDb.balance < bet) return i.reply({ content: '❌ Nincs elég egyenleged ehhez a téthez!', ephemeral: true });
 
             userDb.balance -= bet;
