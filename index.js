@@ -140,7 +140,20 @@ async function syncUserGpuStats() {
 // ==========================================
 // 4. HELPER & TIME FUNCTIONS
 // ==========================================
-const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' Ft';
+const formatShortNum = (num) => {
+    const abs = Math.abs(num);
+    if (abs >= 1_000_000_000) return (num / 1_000_000_000).toFixed(1).replace(/\.0$/, '') + 'B';
+    if (abs >= 1_000_000) return (num / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (abs >= 1_000) return (num / 1_000).toFixed(1).replace(/\.0$/, '') + 'k';
+    return num.toString();
+};
+
+const formatFt = (amount) => {
+    const formatted = new Intl.NumberFormat('hu-HU').format(amount);
+    const short = formatShortNum(amount);
+    return Math.abs(amount) >= 1000 ? `${formatted} Ft (${short} Ft)` : `${formatted} Ft`;
+};
+
 const formatBtc = (amount) => (amount || 0).toFixed(8) + ' BTC';
 const formatBtcWithFt = (btcAmount, priceFt) => `${formatBtc(btcAmount)} (~${formatFt(Math.floor((btcAmount || 0) * priceFt))})`;
 
@@ -436,7 +449,6 @@ setInterval(async () => {
                 settings.btcPriceFt = newPrice;
                 await settings.save();
 
-                // Üzenet a bányász csatornába az új árfolyamról
                 const minerCh = client.channels.cache.get(CONFIG.MINER_CHANNEL);
                 if (minerCh) {
                     const diffPercent = (((newPrice - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
@@ -829,7 +841,7 @@ client.on('interactionCreate', async (i) => {
                         const remMs = userDb.repairUntil - now;
                         const remMin = Math.floor(remMs / (1000 * 60));
                         const remSec = Math.floor((remMs % (1000 * 60)) / 1000);
-                        statusText = `🔴 ** megbízhatatlan / MEGHIBÁSODOTT!**\n🛠️ **Szerelés alatt (Hátralévő idő: ${remMin} perc ${remSec} mp)**`;
+                        statusText = `🔴 **TÚLMELEGEDETT / MEGHIBÁSODOTT!**\n🛠️ **Szerelés alatt (Hátralévő idő: ${remMin} perc ${remSec} mp)**`;
                     } else {
                         statusText = '🔴 **TÚLMELEGEDETT / MEGHIBÁSODOTT!**\n⚠️ *A farm leállt, használd a `/crypto szerviz` parancsot!*';
                     }
@@ -909,7 +921,7 @@ client.on('interactionCreate', async (i) => {
             if (sub === 'szerviz') {
                 if (!userDb.isBroken) return i.reply({ content: '✅ A szervertermednek semmi baja!', ephemeral: true });
                 if (userDb.repairUntil > Date.now()) return i.reply({ content: '⏳ A szerelés már folyamatban van!', ephemeral: true });
-                if (userDb.balance < 100000) return i.reply({ content: '❌ Nincs elég pénzed a szervizre! (Ára: 100 000 Ft)', ephemeral: true });
+                if (userDb.balance < 100000) return i.reply({ content: '❌ Nincs elég pénzed a szervizre! (Ára: 100 000 Ft / 100k Ft)', ephemeral: true });
 
                 userDb.balance -= 100000;
                 userDb.repairUntil = Date.now() + (60 * 60 * 1000);
@@ -1466,18 +1478,18 @@ client.on('interactionCreate', async (i) => {
                 .setTitle('🏢 SZERVERTEREM BŐVÍTÉS')
                 .setDescription('Vásárolj nagyobb helyiséget több helyért, kevesebb meghibásodásért és extra bónuszért!\n*(Megjegyzés: Az Alagsori Doboz az alapértelmezett ingyenes kezdő szobád.)*')
                 .addFields(
-                    { name: '🏠 Garázs Rig', value: 'Ár: **5 000 000 Ft** | Férőhely: **12 db** | Hiba: **8%/óra** | Bónusz: **+10%**', inline: false },
-                    { name: '🏢 Hivatalos Szerverterem', value: 'Ár: **35 000 000 Ft** | Férőhely: **25 db** | Hiba: **5%/óra** | Bónusz: **+25%**', inline: false },
-                    { name: '⚡ Ipari Adatközpont', value: 'Ár: **150 000 000 Ft** | Férőhely: **50 db** | Hiba: **3%/óra** | Bónusz: **+50%**', inline: false }
+                    { name: '🏠 Garázs Rig', value: `Ár: **${formatFt(5000000)}** | Férőhely: **12 db** | Hiba: **8%/óra** | Bónusz: **+10%**`, inline: false },
+                    { name: '🏢 Hivatalos Szerverterem', value: `Ár: **${formatFt(35000000)}** | Férőhely: **25 db** | Hiba: **5%/óra** | Bónusz: **+25%**`, inline: false },
+                    { name: '⚡ Ipari Adatközpont', value: `Ár: **${formatFt(150000000)}** | Férőhely: **50 db** | Hiba: **3%/óra** | Bónusz: **+50%**`, inline: false }
                 );
 
             const select = new StringSelectMenuBuilder()
                 .setCustomId(`select_buy_room_${i.user.id}`)
                 .setPlaceholder('Válassz szobát a megvásárláshoz...')
                 .addOptions([
-                    { label: 'Garázs Rig (5 000 000 Ft)', value: 'garazs' },
-                    { label: 'Hivatalos Szerverterem (35 000 000 Ft)', value: 'szerver' },
-                    { label: 'Ipari Adatközpont (150 000 000 Ft)', value: 'adatkozpont' }
+                    { label: `Garázs Rig (${formatShortNum(5000000)} Ft)`, value: 'garazs' },
+                    { label: `Hivatalos Szerverterem (${formatShortNum(35000000)} Ft)`, value: 'szerver' },
+                    { label: `Ipari Adatközpont (${formatShortNum(150000000)} Ft)`, value: 'adatkozpont' }
                 ]);
 
             const row1 = new ActionRowBuilder().addComponents(select);
@@ -1495,20 +1507,20 @@ client.on('interactionCreate', async (i) => {
                 .setDescription('Vásárolj jobb hűtést a szervertermedhez a meghibásodási esély lecsökkentésére!\n\n**Hűtőrendszerek hatása a túlmelegedésre:**')
                 .addFields(
                     { name: '❄️ Gyári Léghűtés (Alapértelmezett)', value: 'Ár: **Ingyenes** | Esély csökkentés: **0%**', inline: false },
-                    { name: '🌀 Dupla Ventilátoros Hűtés', value: 'Ár: **150 000 Ft** | Esély csökkentés: **-1.0% / óra**', inline: false },
-                    { name: '🌊 Vízhűtéses AIO Rendszer', value: 'Ár: **1 500 000 Ft** | Esély csökkentés: **-2.0% / óra**', inline: false },
-                    { name: '❄️ Ipari Klímarendszer', value: 'Ár: **10 000 000 Ft** | Esély csökkentés: **-3.0% / óra**', inline: false },
-                    { name: '🧪 Kvantum Folyadékhűtés', value: 'Ár: **50 000 000 Ft** | Esély csökkentés: **-4.0% / óra**', inline: false }
+                    { name: '🌀 Dupla Ventilátoros Hűtés', value: `Ár: **${formatFt(150000)}** | Esély csökkentés: **-1.0% / óra**`, inline: false },
+                    { name: '🌊 Vízhűtéses AIO Rendszer', value: `Ár: **${formatFt(1500000)}** | Esély csökkentés: **-2.0% / óra**`, inline: false },
+                    { name: '❄️ Ipari Klímarendszer', value: `Ár: **${formatFt(10000000)}** | Esély csökkentés: **-3.0% / óra**`, inline: false },
+                    { name: '🧪 Kvantum Folyadékhűtés', value: `Ár: **${formatFt(50000000)}** | Esély csökkentés: **-4.0% / óra**`, inline: false }
                 );
 
             const select = new StringSelectMenuBuilder()
                 .setCustomId(`select_buy_cooler_${i.user.id}`)
                 .setPlaceholder('Válassz hűtőrendszert...')
                 .addOptions([
-                    { label: 'Dupla Ventilátor (-1.0% hiba esély)', value: 'dual_fan', description: 'Ár: 150 000 Ft' },
-                    { label: 'Vízhűtéses AIO Rendszer (-2.0% hiba esély)', value: 'water', description: 'Ár: 1 500 000 Ft' },
-                    { label: 'Ipari Klímarendszer (-3.0% hiba esély)', value: 'ac_unit', description: 'Ár: 10 000 000 Ft' },
-                    { label: 'Kvantum Folyadékhűtés (-4.0% hiba esély)', value: 'quantum_cooling', description: 'Ár: 50 000 000 Ft' }
+                    { label: 'Dupla Ventilátor (-1.0% hiba esély)', value: 'dual_fan', description: `Ár: ${formatShortNum(150000)} Ft` },
+                    { label: 'Vízhűtéses AIO Rendszer (-2.0% hiba esély)', value: 'water', description: `Ár: ${formatShortNum(1500000)} Ft` },
+                    { label: 'Ipari Klímarendszer (-3.0% hiba esély)', value: 'ac_unit', description: `Ár: ${formatShortNum(10000000)} Ft` },
+                    { label: 'Kvantum Folyadékhűtés (-4.0% hiba esély)', value: 'quantum_cooling', description: `Ár: ${formatShortNum(50000000)} Ft` }
                 ]);
 
             const row1 = new ActionRowBuilder().addComponents(select);
