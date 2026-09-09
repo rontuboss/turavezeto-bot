@@ -42,6 +42,7 @@ const User = mongoose.model('User', new mongoose.Schema({
     rigs: [{ gpuId: String, name: String, btcPerHour: Number }],
     isBroken: { type: Boolean, default: false },
     repairUntil: { type: Number, default: 0 },
+    brokenAt: { type: Number, default: 0 }, // Elmentjük mikor állt le a farm
     lastBtcClaim: { type: Number, default: Date.now },
     lastTreasure: { type: Number, default: 0 },
     lastDaily: { type: Number, default: 0 },
@@ -496,6 +497,7 @@ setInterval(async () => {
 
                 if (Math.random() < finalFailChance) {
                     u.isBroken = true;
+                    u.brokenAt = Date.now(); // Rögzítjük az áramszünet/leállás pillanatát!
                     await u.save();
                     
                     const ch = client.channels.cache.get(CONFIG.MINER_CHANNEL);
@@ -711,7 +713,7 @@ client.on('interactionCreate', async (i) => {
         const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
         const allowedForMembers = ['mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'hitel', 'btc', 'miner', 'crypto'];
 
-        if (!isMember) return i.reply({ content: '❌ Nincs meg a szükséges rangod a parancsok használatához!', ephemeral: true });
+        if (!isMember) return i.reply({ content: '❌ Nincs meg a szükséges rangod a parancsok használataihoz!', ephemeral: true });
         if (!allowedForMembers.includes(i.commandName) && !isStaff) return i.reply({ content: '❌ Ez a parancs kizárólag a kijelölt rangosoknak érhető el!', ephemeral: true });
 
         const userDb = await getUserDb(i.guild.id, i.user.id);
@@ -818,15 +820,21 @@ client.on('interactionCreate', async (i) => {
                 const gpuCount = userDb.rigs ? userDb.rigs.length : 0;
                 const now = Date.now();
                 
+                // Automatikus szerviz lejárás ellenőrzés
                 if (userDb.isBroken && userDb.repairUntil > 0 && userDb.repairUntil <= now) {
                     userDb.isBroken = false;
                     userDb.repairUntil = 0;
+                    userDb.brokenAt = 0;
+                    userDb.lastBtcClaim = now; // Újraindul a számláló
                     await userDb.save();
                 }
 
-                const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
+                // Kiszámítjuk, hogy meddig tartott a termelés (ha le van állva, a leállás pillanatáig terjed)
+                const calculationEndTime = userDb.isBroken ? (userDb.brokenAt || userDb.lastBtcClaim || now) : now;
+                const hoursPassed = Math.max(0, (calculationEndTime - (userDb.lastBtcClaim || calculationEndTime)) / (1000 * 60 * 60));
+
                 let btcPerHourTotal = 0;
-                if (userDb.rigs && userDb.rigs.length > 0 && !userDb.isBroken) {
+                if (userDb.rigs && userDb.rigs.length > 0) {
                     const rawBtc = userDb.rigs.reduce((sum, r) => sum + (r.btcPerHour || 0), 0);
                     btcPerHourTotal = rawBtc * roomInfo.multiplier;
                 }
@@ -843,7 +851,7 @@ client.on('interactionCreate', async (i) => {
                         const remSec = Math.floor((remMs % (1000 * 60)) / 1000);
                         statusText = `🔴 **TÚLMELEGEDETT / MEGHIBÁSODOTT!**\n🛠️ **Szerelés alatt (Hátralévő idő: ${remMin} perc ${remSec} mp)**`;
                     } else {
-                        statusText = '🔴 **TÚLMELEGEDETT / MEGHIBÁSODOTT!**\n⚠️ *A farm leállt, használd a `/crypto szerviz` parancsot!*';
+                        statusText = '🔴 **TÚLMELEGEDETT / MEGHIBÁSODOTT!**\n⚠️ *A farm leállt, a termelés szünetel! Használd a `/crypto szerviz` parancsot!*';
                     }
                 }
 
@@ -856,25 +864,25 @@ client.on('interactionCreate', async (i) => {
                         { name: '🏢 Helyiség', value: `${roomInfo.name} (${gpuCount}/${roomInfo.maxGpus} kártya)\n*Bónusz:* **+${Math.round((roomInfo.multiplier - 1) * 100)}% termelés**`, inline: true },
                         { name: '🌀 Hűtés', value: `${coolerInfo.name}\n*Meghibásodási esély:* **${finalFailChance}% / óra**`, inline: true },
                         { name: '📊 Státusz', value: statusText, inline: false },
-                        { name: '📈 Végleges Termelés', value: `**${formatBtcWithFt(btcPerHourTotal, settings.btcPriceFt)}** / óra`, inline: false },
+                        { name: '📈 Végleges Termelés', value: userDb.isBroken ? '🔴 **0.00000000 BTC / óra (Leállva)**' : `**${formatBtcWithFt(btcPerHourTotal, settings.btcPriceFt)}** / óra`, inline: false },
                         { name: '🪙 Begyűjthető Bitcoin', value: `**${formatBtcWithFt(minedBtc, settings.btcPriceFt)}**`, inline: false },
                         { name: '💳 Egyenlegeid', value: `• Wallet: **${formatBtcWithFt(userDb.btcBalance || 0, settings.btcPriceFt)}**\n• Cash: **${formatFt(userDb.balance)}**`, inline: false }
                     );
 
+                // Megőrizzük az interaction küldőjének ID-ját a gombban!
                 const row = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`miner_claim_btn_${i.user.id}`).setLabel('💰 BTC Begyűjtése').setStyle(ButtonStyle.Success).setDisabled(minedBtc <= 0 || userDb.isBroken)
+                    new ButtonBuilder().setCustomId(`miner_claim_btn_${i.user.id}`).setLabel('💰 BTC Begyűjtése').setStyle(ButtonStyle.Success).setDisabled(minedBtc <= 0)
                 );
 
                 return i.editReply({ embeds: [embed], components: [row] });
             }
 
             if (sub === 'claim') {
-                if (userDb.isBroken) return i.reply({ content: '❌ A szervertermed jelenleg le van állva! Szervizelés szükséges.', ephemeral: true });
+                const now = Date.now();
+                const calculationEndTime = userDb.isBroken ? (userDb.brokenAt || userDb.lastBtcClaim || now) : now;
+                const hoursPassed = Math.max(0, (calculationEndTime - (userDb.lastBtcClaim || calculationEndTime)) / (1000 * 60 * 60));
 
                 const roomInfo = ROOMS[userDb.roomType || 'alagsor'];
-                const now = Date.now();
-                const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
-                
                 let rawBtc = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + (r.btcPerHour || 0), 0) : 0;
                 let btcPerHourTotal = rawBtc * roomInfo.multiplier;
                 const minedBtc = hoursPassed * btcPerHourTotal;
@@ -882,7 +890,8 @@ client.on('interactionCreate', async (i) => {
                 if (minedBtc <= 0) return i.reply({ content: '❌ Még nincs begyűjthető Bitcoinod!', ephemeral: true });
 
                 userDb.btcBalance = (userDb.btcBalance || 0) + minedBtc;
-                userDb.lastBtcClaim = now;
+                userDb.lastBtcClaim = now; // Begyűjtés után frissül a dátum
+                if (userDb.isBroken) userDb.brokenAt = now; // Ha még mindig hibás, a friss dátumra állítjuk
                 await userDb.save();
 
                 return i.reply({ content: `🎉 Sikeresen begyűjtöttél **${formatBtcWithFt(minedBtc, settings.btcPriceFt)}**-t!`, ephemeral: true });
@@ -1337,7 +1346,7 @@ client.on('interactionCreate', async (i) => {
                     await i.member.timeout(60 * 1000, 'Orosz rulett vesztes').catch(() => {});
                     await i.channel.send({ content: `💥 **BANG!** <@${i.user.id}> meghúzta a ravaszt, a fegyver eldördült! (1 perc némítás) 🪦` });
                 } else {
-                    await i.channel.send({ content: `*KIKK...* <@${i.user.id}> meghúzta a ravaszt, a fegyver nem sült el. Túlélte! 🎯` });
+                    await i.channel.send({ content: `*KIKK...* <@${i.user.id}> meghúzta a ravaszt, a fegyver nem sült el. Túlhelte! 🎯` });
                 }
                 await i.deleteReply().catch(() => {});
             } else if (i.commandName === 'roast') {
@@ -1443,11 +1452,45 @@ client.on('interactionCreate', async (i) => {
         const userDb = await getUserDb(i.guild.id, i.user.id);
         const settings = await getGuildSettings(i.guild.id);
 
+        // BEGYŰJTÉSI GOMB ELLENŐRZÉSE ÉS JOGOSULTSÁG SZŰRÉS
+        if (i.customId.startsWith('miner_claim_btn_')) {
+            const ownerId = i.customId.replace('miner_claim_btn_', '');
+            
+            // Ha nem a saját gombjára nyomott rá!
+            if (ownerId !== i.user.id) {
+                return i.reply({ content: '❌ Ez nem a te bányász farmod! Nyiss egy sajátot a `/crypto farm` parancssal! 🤡', ephemeral: true });
+            }
+
+            const now = Date.now();
+            const calculationEndTime = userDb.isBroken ? (userDb.brokenAt || userDb.lastBtcClaim || now) : now;
+            const hoursPassed = Math.max(0, (calculationEndTime - (userDb.lastBtcClaim || calculationEndTime)) / (1000 * 60 * 60));
+
+            const roomInfo = ROOMS[userDb.roomType || 'alagsor'];
+            let rawBtc = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + (r.btcPerHour || 0), 0) : 0;
+            let btcPerHourTotal = rawBtc * roomInfo.multiplier;
+            const minedBtc = hoursPassed * btcPerHourTotal;
+
+            if (minedBtc <= 0) return i.reply({ content: '❌ Nincs begyűjthető Bitcoin!', ephemeral: true });
+
+            userDb.btcBalance = (userDb.btcBalance || 0) + minedBtc;
+            userDb.lastBtcClaim = now;
+            if (userDb.isBroken) userDb.brokenAt = now; // Ha még mindig hibás, frissítjük az alapot
+            await userDb.save();
+
+            // Gomb letiltása a válasz után
+            const disabledRow = new ActionRowBuilder().addComponents(
+                ButtonBuilder.from(i.message.components[0].components[0]).setDisabled(true)
+            );
+            await i.message.edit({ components: [disabledRow] }).catch(() => {});
+
+            return i.reply({ content: `🎉 Sikeresen begyűjtöttél **${formatBtcWithFt(minedBtc, settings.btcPriceFt)}**-t!`, ephemeral: true });
+        }
+
         if (i.customId.startsWith('miner_')) {
             const parts = i.customId.split('_');
             const ownerId = parts[parts.length - 1];
 
-            if (ownerId && ownerId !== i.user.id && !['claim_btn'].some(k => i.customId.includes(k))) {
+            if (ownerId && ownerId !== i.user.id) {
                 return i.reply({ content: '❌ Ez nem a te bányász bolton! Nyiss egy sajátot a `/miner bolt` parancssal! 🤡', ephemeral: true });
             }
         }
@@ -1549,24 +1592,6 @@ client.on('interactionCreate', async (i) => {
             );
 
             return i.update({ embeds: [embed], components: [row] });
-        }
-
-        if (i.customId.startsWith('miner_claim_btn')) {
-            const roomInfo = ROOMS[userDb.roomType || 'alagsor'];
-            const now = Date.now();
-            const hoursPassed = (now - (userDb.lastBtcClaim || now)) / (1000 * 60 * 60);
-            
-            let rawBtc = userDb.rigs ? userDb.rigs.reduce((sum, r) => sum + (r.btcPerHour || 0), 0) : 0;
-            let btcPerHourTotal = rawBtc * roomInfo.multiplier;
-            const minedBtc = hoursPassed * btcPerHourTotal;
-
-            if (minedBtc <= 0) return i.reply({ content: '❌ Nincs begyűjthető Bitcoin!', ephemeral: true });
-
-            userDb.btcBalance = (userDb.btcBalance || 0) + minedBtc;
-            userDb.lastBtcClaim = now;
-            await userDb.save();
-
-            return i.reply({ content: `🎉 Sikeresen begyűjtöttél **${formatBtcWithFt(minedBtc, settings.btcPriceFt)}**-t!`, ephemeral: true });
         }
 
         if (i.customId === 'bj_hit' || i.customId === 'bj_stand') {
