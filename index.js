@@ -56,6 +56,7 @@ const User = mongoose.model('User', new mongoose.Schema({
 const GuildSetting = mongoose.model('GuildSetting', new mongoose.Schema({
     guildId: String,
     casinoLossVault: { type: Number, default: 0 },
+    casinoWinVault: { type: Number, default: 0 }, // GLOBÁLIS KASZINÓ NYEREMÉNY TÁROLÓ
     btcPriceFt: { type: Number, default: BASE_BTC_PRICE },
     btcHistory: { type: [Number], default: [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE] }
 }));
@@ -168,7 +169,7 @@ const getUserDb = async (guildId, userId) => {
 async function getGuildSettings(guildId) {
     let settings = await GuildSetting.findOne({ guildId });
     if (!settings) {
-        settings = new GuildSetting({ guildId, casinoLossVault: 0, btcPriceFt: BASE_BTC_PRICE, btcHistory: [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE] });
+        settings = new GuildSetting({ guildId, casinoLossVault: 0, casinoWinVault: 0, btcPriceFt: BASE_BTC_PRICE, btcHistory: [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE] });
         await settings.save();
     }
     return settings;
@@ -181,7 +182,18 @@ async function addLossToVault(guildId, amount) {
         settings.casinoLossVault += amount;
         await settings.save();
     } catch (e) {
-        console.error('❌ Hiba a globális kaszinó számla frissítésekor:', e);
+        console.error('❌ Hiba a globális kaszinó veszteség frissítésekor:', e);
+    }
+}
+
+async function addWinToVault(guildId, amount) {
+    if (amount <= 0) return;
+    try {
+        const settings = await getGuildSettings(guildId);
+        settings.casinoWinVault = (settings.casinoWinVault || 0) + amount;
+        await settings.save();
+    } catch (e) {
+        console.error('❌ Hiba a globális kaszinó nyeremény frissítésekor:', e);
     }
 }
 
@@ -665,6 +677,8 @@ client.on('messageReactionAdd', async (reaction, user) => {
     uDb.stats.mines.won += 1;
     uDb.stats.mines.netProfit += profit;
     await uDb.save();
+
+    await addWinToVault(reaction.message.guild.id, profit);
 
     const endEmbed = new EmbedBuilder()
         .setColor('#00ff00')
@@ -1165,9 +1179,11 @@ client.on('interactionCreate', async (i) => {
 
         if (i.commandName === 'top') {
             const topUsers = await User.find({ guildId: i.guild.id }).sort({ balance: -1 }).limit(10);
-            const totalLoss = settings.casinoLossVault;
+            const totalLoss = settings.casinoLossVault || 0;
+            const totalWin = settings.casinoWinVault || 0;
 
             let desc = `🔴 **Globális kaszinó veszteség:** \`\`\`diff\n-${formatFt(totalLoss)}\`\`\`\n`;
+            desc += `🟢 **Globális kaszinó nyeremény:** \`\`\`diff\n+${formatFt(totalWin)}\`\`\`\n`;
             desc += `👑 **A leggazdagabb tagok:**\n`;
             
             topUsers.forEach((u, index) => {
@@ -1234,6 +1250,8 @@ client.on('interactionCreate', async (i) => {
                 userDb.stats.blackjack.won += 1;
                 userDb.stats.blackjack.netProfit += profit;
                 await userDb.save();
+
+                await addWinToVault(i.guild.id, profit);
 
                 const embed = new EmbedBuilder()
                     .setColor('#ffd700')
@@ -1600,6 +1618,7 @@ client.on('interactionCreate', async (i) => {
                     userDb.stats.blackjack.won += 1;
                     userDb.stats.blackjack.netProfit += game.bet;
                     resultText = `🎉 **NYERTÉL!** Kaptál **${formatFt(wonAmount)}**-ot!`;
+                    await addWinToVault(i.guild.id, game.bet);
                 } else if (playerSum === dealerSum) {
                     embedColor = '#ffd700';
                     userDb.balance += game.bet;
