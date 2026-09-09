@@ -395,22 +395,6 @@ async function endGiveaway(gwData) {
     } catch (e) { console.error(e); }
 }
 
-// 5% kamat 3 percenként a meglévő egyenlegre
-setInterval(async () => {
-    try {
-        const users = await User.find({ balance: { $gt: 0 } });
-        for (const u of users) {
-            const interest = Math.floor(u.balance * 0.05);
-            if (interest > 0) {
-                u.balance += interest;
-                await u.save();
-            }
-        }
-    } catch (e) {
-        console.error('❌ Hiba a kamatszámításkor:', e);
-    }
-}, 3 * 60 * 1000);
-
 // PONTOSAN KEREK ÓRÁNKÉNT (00:00-KOR) LEFUTÓ ÁRFOLYAM ÉS ÁRAMSZÜNET IDŐZÍTŐ
 let lastTriggeredHour = '';
 setInterval(async () => {
@@ -539,6 +523,9 @@ const commands = [
     new SlashCommandBuilder().setName('removeloan').setDescription('Hitel törlése egy felhasználóról (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addUserOption(o => o.setName('user').setDescription('Kinek a hitelét töröljük?').setRequired(true))
         .addIntegerOption(o => o.setName('osszeg').setDescription('Törlendő összeg (Ha üres, a teljes hitelt törli)')),
+    new SlashCommandBuilder().setName('removebalance').setDescription('Pénz levonása / törlése egy felhasználótól (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
+        .addUserOption(o => o.setName('user').setDescription('Kinek a számlájáról vonjunk le pénzt?').setRequired(true))
+        .addNumberOption(o => o.setName('osszeg').setDescription('Levonandó összeg (Ha üres, teljes egyenleg törlése/nullázása)')),
     new SlashCommandBuilder().setName('fakeban').setDescription('Troll kamu kitiltás').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addUserOption(o => o.setName('user').setDescription('Felhasználó').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('Indok')),
     new SlashCommandBuilder().setName('nitro').setDescription('Ingyen Discord Nitro ajándék (kamu)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false),
     new SlashCommandBuilder().setName('mock').setDescription('Spongyabob gúnyolódó szöveg').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false).addStringOption(o => o.setName('text').setDescription('A szöveg').setRequired(true)),
@@ -925,6 +912,25 @@ client.on('interactionCreate', async (i) => {
                 targetDb.loanDebt -= removeAmount;
                 await targetDb.save();
                 return i.reply({ content: `✅ **Sikeres törlesztés!** Elengedtél **${formatFt(removeAmount)}** hitelt <@${targetUser.id}> számlájáról!\n• Hátralévő tartozás: **${formatFt(targetDb.loanDebt)}**` });
+            }
+        }
+
+        if (i.commandName === 'removebalance') {
+            if (!isStaff) return i.reply({ content: '❌ Nincs jogosultságod ehhez a parancshoz!', ephemeral: true });
+
+            const targetUser = i.options.getUser('user');
+            const removeAmount = i.options.getNumber('osszeg');
+            const targetDb = await getUserDb(i.guild.id, targetUser.id);
+
+            if (!removeAmount || removeAmount >= targetDb.balance) {
+                const oldBal = targetDb.balance;
+                targetDb.balance = 0;
+                await targetDb.save();
+                return i.reply({ content: `✅ **Egyenleg nullázva!** <@${targetUser.id}> teljes vagyonát (**${formatFt(oldBal)}**) levontad!` });
+            } else {
+                targetDb.balance -= removeAmount;
+                await targetDb.save();
+                return i.reply({ content: `✅ **Sikeres levonás!** Levontál **${formatFt(removeAmount)}**-ot <@${targetUser.id}> számlájáról!\n• Új egyenlege: **${formatFt(targetDb.balance)}**` });
             }
         }
 
