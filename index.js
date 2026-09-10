@@ -156,17 +156,17 @@ const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' F
 const formatBtc = (amount) => (amount || 0).toFixed(8) + ' BTC';
 const formatBtcWithFt = (btcAmount, priceFt) => `${formatBtc(btcAmount)} (~${formatFt(Math.floor((btcAmount || 0) * priceFt))})`;
 
-// 📊 10 PONTOS TRADINGVIEW GRAFIKON ÉRTÉKEKKEL ÉS DINAMIKUS SZÍNEKKEL (AUTOMATIKUS ÉS MANUÁLIS JELENTÉSEKHEZ)
+// 📊 GYERTYADIAGRAM (CANDLESTICK) GRAFIKON - ZÖLD/PIROS GYERTYÁK + TÖKÉLETES TERTÉK MARGÓVAL
 function getCryptoChartUrl(historyArray) {
     let prices = [...historyArray];
     
-    // Garantáljuk, hogy MINDIG legyen 10 pont a grafikonon (ha kevesebb van, feltöltjük az elejét)
+    // Garantáljuk a 10 pontot
     while (prices.length < 10) {
         prices.unshift(prices[0] || BASE_BTC_PRICE);
     }
     prices = prices.slice(-10);
 
-    // Időcímkék (-4h 30m, -4h, ..., MOST)
+    // Címkék
     const labels = prices.map((_, idx) => {
         const totalMinutesAgo = (prices.length - 1 - idx) * 30;
         if (totalMinutesAgo === 0) return 'MOST';
@@ -177,48 +177,50 @@ function getCryptoChartUrl(historyArray) {
         return `-${hours}h${mins}m`;
     });
 
-    const lastPrice = prices[prices.length - 1];
-    const prevPrice = prices[prices.length - 2];
-    const isUp = lastPrice >= prevPrice;
+    // Min és Max kiszámítása a margóhoz (hogy ne lógjon ki a felirat a képből)
+    const minP = Math.min(...prices);
+    const maxP = Math.max(...prices);
+    const padding = (maxP - minP) * 0.25 || BASE_BTC_PRICE * 0.05;
 
-    const chartColor = isUp ? '#2ecc71' : '#e74c3c';
-    const bgGradient = isUp ? 'rgba(46, 204, 113, 0.25)' : 'rgba(231, 76, 60, 0.25)';
+    // Gyertya adatstruktúra generálása (Open, High, Low, Close)
+    const candleData = prices.map((price, idx) => {
+        const prev = idx === 0 ? price : prices[idx - 1];
+        // Kisebb ingadozás szimulálása a kanócnak (High/Low)
+        const high = Math.max(prev, price) + Math.floor(price * 0.002);
+        const low = Math.min(prev, price) - Math.floor(price * 0.002);
+        return { o: prev, h: high, l: low, c: price };
+    });
 
     const chartConfig = {
-        type: 'line',
+        type: 'candlestick',
         data: {
             labels: labels,
             datasets: [{
-                label: 'BTC / HUF',
-                data: prices,
-                borderColor: chartColor,
-                borderWidth: 3,
-                fill: true,
-                backgroundColor: bgGradient,
-                pointBackgroundColor: chartColor,
-                pointBorderColor: '#ffffff',
-                pointRadius: 6,
-                pointHoverRadius: 8,
-                lineTension: 0.2
+                label: 'BTC/HUF',
+                data: candleData,
+                color: {
+                    up: '#2ecc71',         // Zöld gyertya (ha felment)
+                    down: '#e74c3c',       // Piros gyertya (ha leesett)
+                    unchanged: '#2ecc71'
+                }
             }]
         },
         options: {
             legend: { display: false },
             title: { 
                 display: true, 
-                text: `BITCOIN (BTC/HUF) - UTOLSÓ 10 FRISSÍTÉS (${isUp ? '🟢 EMELKEDŐ' : '🔴 CSÖKKENŐ'})`, 
+                text: '🪙 BITCOIN (BTC/HUF) - 10 FRISSÍTÉS GYERTYADIAGRAM', 
                 fontColor: '#ffffff', 
                 fontSize: 13 
             },
             plugins: {
-                // Értékek megjelenítése a pontok felett
                 datalabels: {
                     display: true,
                     align: 'top',
                     anchor: 'end',
                     color: '#ffffff',
-                    font: { weight: 'bold', size: 10 },
-                    formatter: (val) => (val / 1000000).toFixed(2) + 'M'
+                    font: { weight: 'bold', size: 9 },
+                    formatter: (val) => (val.c / 1000000).toFixed(2) + 'M Ft'
                 }
             },
             scales: {
@@ -229,6 +231,8 @@ function getCryptoChartUrl(historyArray) {
                 yAxes: [{ 
                     gridLines: { color: 'rgba(255, 255, 255, 0.1)' }, 
                     ticks: { 
+                        min: Math.floor(minP - padding),
+                        max: Math.ceil(maxP + padding),
                         fontColor: '#aaaaaa',
                         fontSize: 9,
                         callback: (val) => (val / 1000000).toFixed(1) + 'M Ft' 
@@ -238,8 +242,7 @@ function getCryptoChartUrl(historyArray) {
         }
     };
 
-    // A &plugins=chartjs-plugin-datalabels kényszeríti a szövegek megjelenítését a pontok felett!
-    return `https://quickchart.io/chart?bkg=%2318191c&w=650&h=320&v=2.9&plugins=chartjs-plugin-datalabels&c=${encodeURIComponent(JSON.stringify(chartConfig))}`;
+    return `https://quickchart.io/chart?bkg=%2318191c&w=650&h=320&v=2.9&plugins=chartjs-plugin-datalabels,financial&c=${encodeURIComponent(JSON.stringify(chartConfig))}`;
 }
 
 const getBudapestDate = () => new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Budapest" }));
