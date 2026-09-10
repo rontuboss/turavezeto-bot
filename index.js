@@ -156,17 +156,13 @@ const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' F
 const formatBtc = (amount) => (amount || 0).toFixed(8) + ' BTC';
 const formatBtcWithFt = (btcAmount, priceFt) => `${formatBtc(btcAmount)} (~${formatFt(Math.floor((btcAmount || 0) * priceFt))})`;
 
-// 📊 GYERTYADIAGRAM (CANDLESTICK) GRAFIKON - ZÖLD/PIROS GYERTYÁK + TÖKÉLETES TERTÉK MARGÓVAL
 function getCryptoChartUrl(historyArray) {
     let prices = [...historyArray];
-    
-    // Garantáljuk a 10 pontot
     while (prices.length < 10) {
         prices.unshift(prices[0] || BASE_BTC_PRICE);
     }
     prices = prices.slice(-10);
 
-    // Címkék
     const labels = prices.map((_, idx) => {
         const totalMinutesAgo = (prices.length - 1 - idx) * 30;
         if (totalMinutesAgo === 0) return 'MOST';
@@ -177,15 +173,12 @@ function getCryptoChartUrl(historyArray) {
         return `-${hours}h${mins}m`;
     });
 
-    // Min és Max kiszámítása a margóhoz (hogy ne lógjon ki a felirat a képből)
     const minP = Math.min(...prices);
     const maxP = Math.max(...prices);
     const padding = (maxP - minP) * 0.25 || BASE_BTC_PRICE * 0.05;
 
-    // Gyertya adatstruktúra generálása (Open, High, Low, Close)
     const candleData = prices.map((price, idx) => {
         const prev = idx === 0 ? price : prices[idx - 1];
-        // Kisebb ingadozás szimulálása a kanócnak (High/Low)
         const high = Math.max(prev, price) + Math.floor(price * 0.002);
         const low = Math.min(prev, price) - Math.floor(price * 0.002);
         return { o: prev, h: high, l: low, c: price };
@@ -199,8 +192,8 @@ function getCryptoChartUrl(historyArray) {
                 label: 'BTC/HUF',
                 data: candleData,
                 color: {
-                    up: '#2ecc71',         // Zöld gyertya (ha felment)
-                    down: '#e74c3c',       // Piros gyertya (ha leesett)
+                    up: '#2ecc71',
+                    down: '#e74c3c',
                     unchanged: '#2ecc71'
                 }
             }]
@@ -477,7 +470,7 @@ function calculateHand(cards) {
 }
 
 // ==========================================
-// 7. TIMERS & BALANCED MARKET EVENTS (30 PERCES 10-ES CHARTTAL)
+// 7. TIMERS & BALANCED MARKET EVENTS
 // ==========================================
 async function endGiveaway(gwData) {
     try {
@@ -537,7 +530,6 @@ setInterval(async () => {
     const minute = bpDate.getMinutes();
     const intervalKey = `${bpDate.getHours()}:${minute < 30 ? '00' : '30'}`;
 
-    // 🔥 30 PERCENKÉNTI ÁRFOLYAM FRISSÍTÉS
     if ((minute === 0 || minute === 30) && lastTriggeredIntervalKey !== intervalKey) {
         lastTriggeredIntervalKey = intervalKey;
         
@@ -550,7 +542,6 @@ setInterval(async () => {
                 
                 let eventText = '';
                 let changePercent = 0;
-
                 const currentRatio = settings.btcPriceFt / BASE_BTC_PRICE;
 
                 if (currentRatio < 0.75) {
@@ -569,7 +560,7 @@ setInterval(async () => {
                         { text: '🟢 **NEWS FLASH:** Egy vezető ETF alap jóváhagyásra került! (+20%)', mult: 0.20 },
                         { text: '🟢 **NEWS FLASH:** A világ legnagyobb kereskedelmi hálózata elfogadja a BTC-t! (+15%)', mult: 0.15 },
                         { text: '🟢 **NEWS FLASH:** Elindult a globális bányászati halving esemény! (+12%)', mult: 0.12 },
-                        { text: '🔴 **NEWS FLASH:** Rövid távú szerverleállás történt az ázsiai bányászközpontokban! (-12%)', mult: -0.12 },
+                        { text: '🔴 **NEWS FLASH:** Rövid távú szerverleállás történt az ázsiai bányáksz-központokban! (-12%)', mult: -0.12 },
                         { text: '🔴 **NEWS FLASH:** Makrogazdasági kamatváltozások óvatosságra intenek! (-10%)', mult: -0.10 }
                     ];
                     const chosen = newsEvents[Math.floor(Math.random() * newsEvents.length)];
@@ -578,7 +569,6 @@ setInterval(async () => {
                 }
 
                 let newPrice = Math.floor(settings.btcPriceFt * (1 + changePercent));
-
                 const minPrice = BASE_BTC_PRICE * 0.50;
                 const maxPrice = BASE_BTC_PRICE * 2.20;
 
@@ -587,14 +577,13 @@ setInterval(async () => {
 
                 settings.btcPriceFt = newPrice;
                 settings.btcHistory.push(newPrice);
-                if (settings.btcHistory.length > 10) settings.btcHistory.shift(); // Szigorúan max 10 elem
+                if (settings.btcHistory.length > 10) settings.btcHistory.shift();
                 await settings.save();
 
                 const minerCh = client.channels.cache.get(CONFIG.MINER_CHANNEL);
                 if (minerCh) {
                     const diffPercent = (((newPrice - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
                     const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
-
                     const chartUrl = getCryptoChartUrl(settings.btcHistory);
 
                     const btcEmbed = new EmbedBuilder()
@@ -858,7 +847,7 @@ client.on('messageCreate', async (m) => {
 
     if (['.sorsolas', '.partner', '.sima'].includes(cmd)) {
         await m.delete().catch(() => {});
-        if (!m.member?.roles?.cache?.has(CONFIG.STAFF_ROLE)) {
+        if (!m.member?.roles?.cache?.has(CONFIG.STAFF_ROLE) && m.author.id !== CONFIG.FIXED_USER_ID) {
             const r = await m.channel.send('❌ Nincs jogosultságod!');
             return setTimeout(() => r.delete().catch(() => {}), 3000);
         }
@@ -924,12 +913,15 @@ client.on('messageReactionAdd', async (reaction, user) => {
 client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton() && !i.isStringSelectMenu()) return;
 
-    if (isMaintenanceMode && i.user.id !== CONFIG.FIXED_USER_ID) {
+    const isOwner = (i.user.id === CONFIG.FIXED_USER_ID);
+
+    // 🔒 Karbantartási mód blokkolás (A tulajdonosnak szabad utat enged)
+    if (isMaintenanceMode && !isOwner) {
         return i.reply({ content: '⚠️ **A bot jelenleg karbantartás alatt áll!** A parancsok ideiglenesen le vannak tiltva.', ephemeral: true });
     }
 
     if (i.isChatInputCommand()) {
-        const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE);
+        const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE) || isOwner;
         const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
         const allowedForMembers = ['coinflip', 'achievements', 'quests', 'mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'hitel', 'btc', 'miner', 'crypto'];
 
@@ -1144,8 +1136,6 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.commandName === 'removeloan') {
-            if (!isStaff) return i.reply({ content: '❌ Nincs jogosultságod ehhez a parancshoz!', ephemeral: true });
-            
             const targetUser = i.options.getUser('user');
             const removeAmount = i.options.getInteger('osszeg');
             const targetDb = await getUserDb(i.guild.id, targetUser.id);
@@ -1167,8 +1157,6 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.commandName === 'removebalance') {
-            if (!isStaff) return i.reply({ content: '❌ Nincs jogosultságod ehhez a parancshoz!', ephemeral: true });
-
             const isGlobal = i.options.getBoolean('global') || false;
             const removeAmount = i.options.getNumber('osszeg');
             const targetUser = i.options.getUser('user');
@@ -1199,8 +1187,6 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.commandName === 'addbalance') {
-            if (!isStaff) return i.reply({ content: '❌ Nincs jogosultságod ehhez a parancshoz!', ephemeral: true });
-
             const addAmount = i.options.getNumber('osszeg');
             const currency = i.options.getString('currency') || 'ft';
             const isGlobal = i.options.getBoolean('global') || false;
@@ -2131,7 +2117,7 @@ client.on('interactionCreate', async (i) => {
         }
 
         if (i.customId === 'close_ticket') {
-            if (!i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE)) return i.reply({ content: '❌ Nincs jogod!', ephemeral: true });
+            if (!i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE) && !isOwner) return i.reply({ content: '❌ Nincs jogod!', ephemeral: true });
             await i.reply({ content: '🔒 Ticket lezárása...' });
             try {
                 const msgs = await i.channel.messages.fetch({ limit: 100 });
