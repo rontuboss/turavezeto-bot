@@ -156,11 +156,17 @@ const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' F
 const formatBtc = (amount) => (amount || 0).toFixed(8) + ' BTC';
 const formatBtcWithFt = (btcAmount, priceFt) => `${formatBtc(btcAmount)} (~${formatFt(Math.floor((btcAmount || 0) * priceFt))})`;
 
-// 📊 10 FRISSÍTÉSES TRADINGVIEW GRAFIKON (ZÖLD / PIROS DINAMIKUS DÍSZÍTÉSSEL)
+// 📊 10 PONTOS TRADINGVIEW GRAFIKON ÉRTÉKEKKEL ÉS DINAMIKUS SZÍNEKKEL (AUTOMATIKUS ÉS MANUÁLIS JELENTÉSEKHEZ)
 function getCryptoChartUrl(historyArray) {
-    const prices = historyArray.slice(-10); // Utolsó 10 frissítés
+    let prices = [...historyArray];
     
-    // Érthető időcímkék generálása (-4h 30m, -4h, ..., MOST)
+    // Garantáljuk, hogy MINDIG legyen 10 pont a grafikonon (ha kevesebb van, feltöltjük az elejét)
+    while (prices.length < 10) {
+        prices.unshift(prices[0] || BASE_BTC_PRICE);
+    }
+    prices = prices.slice(-10);
+
+    // Időcímkék (-4h 30m, -4h, ..., MOST)
     const labels = prices.map((_, idx) => {
         const totalMinutesAgo = (prices.length - 1 - idx) * 30;
         if (totalMinutesAgo === 0) return 'MOST';
@@ -168,16 +174,15 @@ function getCryptoChartUrl(historyArray) {
         const mins = totalMinutesAgo % 60;
         if (hours === 0) return `-${mins}m`;
         if (mins === 0) return `-${hours}h`;
-        return `-${hours}h ${mins}m`;
+        return `-${hours}h${mins}m`;
     });
 
-    // Ha az utolsó ár magasabb vagy egyenlő az előzőnél: ZÖLD (Bullish), egyébként PIROS (Bearish)
     const lastPrice = prices[prices.length - 1];
-    const prevPrice = prices.length > 1 ? prices[prices.length - 2] : lastPrice;
+    const prevPrice = prices[prices.length - 2];
     const isUp = lastPrice >= prevPrice;
 
     const chartColor = isUp ? '#2ecc71' : '#e74c3c';
-    const bgGradient = isUp ? 'rgba(46, 204, 113, 0.2)' : 'rgba(231, 76, 60, 0.2)';
+    const bgGradient = isUp ? 'rgba(46, 204, 113, 0.25)' : 'rgba(231, 76, 60, 0.25)';
 
     const chartConfig = {
         type: 'line',
@@ -192,37 +197,49 @@ function getCryptoChartUrl(historyArray) {
                 backgroundColor: bgGradient,
                 pointBackgroundColor: chartColor,
                 pointBorderColor: '#ffffff',
-                pointRadius: 5,
-                pointHoverRadius: 7,
-                lineTension: 0.25
+                pointRadius: 6,
+                pointHoverRadius: 8,
+                lineTension: 0.2
             }]
         },
         options: {
             legend: { display: false },
             title: { 
                 display: true, 
-                text: `🪙 BITCOIN (BTC/HUF) - UTOLSÓ 10 FRISSÍTÉS (${isUp ? '🟢 EMELKEDŐ TREND' : '🔴 CSÖKKENŐ TREND'})`, 
+                text: `BITCOIN (BTC/HUF) - UTOLSÓ 10 FRISSÍTÉS (${isUp ? '🟢 EMELKEDŐ' : '🔴 CSÖKKENŐ'})`, 
                 fontColor: '#ffffff', 
                 fontSize: 13 
             },
+            plugins: {
+                // Értékek megjelenítése a pontok felett
+                datalabels: {
+                    display: true,
+                    align: 'top',
+                    anchor: 'end',
+                    color: '#ffffff',
+                    font: { weight: 'bold', size: 10 },
+                    formatter: (val) => (val / 1000000).toFixed(2) + 'M'
+                }
+            },
             scales: {
                 xAxes: [{ 
-                    gridLines: { color: 'rgba(255, 255, 255, 0.08)' }, 
-                    ticks: { fontColor: '#bbbbbb', fontSize: 10 } 
+                    gridLines: { color: 'rgba(255, 255, 255, 0.1)' }, 
+                    ticks: { fontColor: '#ffffff', fontSize: 10 } 
                 }],
                 yAxes: [{ 
-                    gridLines: { color: 'rgba(255, 255, 255, 0.12)' }, 
+                    gridLines: { color: 'rgba(255, 255, 255, 0.1)' }, 
                     ticks: { 
-                        fontColor: '#ffffff',
-                        fontSize: 10,
-                        callback: (val) => (val / 1000000).toFixed(2) + 'M Ft' 
+                        fontColor: '#aaaaaa',
+                        fontSize: 9,
+                        callback: (val) => (val / 1000000).toFixed(1) + 'M Ft' 
                     } 
                 }]
             }
         }
     };
 
-    return `https://quickchart.io/chart?bkg=%2318191c&w=650&h=320&v=2.9&c=${encodeURIComponent(JSON.stringify(chartConfig))}`;
+    // A &plugins=chartjs-plugin-datalabels kényszeríti a szövegek megjelenítését a pontok felett!
+    return `https://quickchart.io/chart?bkg=%2318191c&w=650&h=320&v=2.9&plugins=chartjs-plugin-datalabels&c=${encodeURIComponent(JSON.stringify(chartConfig))}`;
 }
 
 const getBudapestDate = () => new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Budapest" }));
