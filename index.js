@@ -630,12 +630,12 @@ const commands = [
     new SlashCommandBuilder().setName('removeloan').setDescription('Hitel törlése (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addUserOption(o => o.setName('user').setDescription('Felhasználó').setRequired(true))
         .addIntegerOption(o => o.setName('osszeg').setDescription('Törlendő összeg')),
-    new SlashCommandBuilder().setName('removebalance').setDescription('Pénz levonása (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
+    new SlashCommandBuilder().setName('removebalance').setDescription('Pénz levonása (Kizárólag Tulajdonos)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addUserOption(o => o.setName('user').setDescription('Felhasználó'))
         .addNumberOption(o => o.setName('osszeg').setDescription('Összeg'))
         .addBooleanOption(o => o.setName('global').setDescription('Globális-e')),
     
-    new SlashCommandBuilder().setName('addbalance').setDescription('Pénz vagy BTC adása (Admin)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
+    new SlashCommandBuilder().setName('addbalance').setDescription('Pénz vagy BTC adása (Kizárólag Tulajdonos)').setDefaultMemberPermissions(ADMIN_PERM).setDMPermission(false)
         .addNumberOption(o => o.setName('osszeg').setDescription('Összeg (Ft vagy BTC)').setRequired(true))
         .addStringOption(o => o.setName('currency').setDescription('Pénznem kiválasztása').addChoices(
             { name: '💵 Cash (Ft)', value: 'ft' },
@@ -892,6 +892,11 @@ client.on('interactionCreate', async (i) => {
             const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE) || isOwner;
             const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
             const allowedForMembers = ['coinflip', 'achievements', 'quests', 'mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'hitel', 'btc', 'miner', 'crypto'];
+
+            // 👑 KIZÁRÓLAG FEJLESZTŐI / TULAJDONOSI PARANCSOK TISZTÁZÁSA
+            if (['addbalance', 'removebalance'].includes(i.commandName) && !isOwner) {
+                return i.reply({ content: '❌ **Ez a parancs kizárólag a bot tulajdonosa számára érhető el!**', ephemeral: true });
+            }
 
             if (!isMember) return i.reply({ content: '❌ Nincs meg a szükséges rangod a parancsok használatához!', ephemeral: true });
             if (!allowedForMembers.includes(i.commandName) && !isStaff) return i.reply({ content: '❌ Ez a parancs kizárólag a kijelölt rangosoknak érhető el!', ephemeral: true });
