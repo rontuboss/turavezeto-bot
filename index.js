@@ -518,24 +518,27 @@ setInterval(async () => {
                 let changePercent = 0;
                 const currentRatio = settings.btcPriceFt / BASE_BTC_PRICE;
 
-                if (currentRatio < 0.75) {
-                    changePercent = (Math.random() * 0.08) + 0.03;
-                    eventText = '📈 **PIACI REAKCIÓ:** A befektetők kihasználják az alacsony árat! (+BULLISH)';
-                } else if (currentRatio > 1.50) {
-                    changePercent = (Math.random() * -0.08) - 0.01;
-                    eventText = '📉 **PIACI CORRECTION:** Profitrealizálás miatti eladási hullám.';
+                // 🚀 NAGYOBB ÁRFOLYAM UGRÁSOK (15% - 30%)
+                const baseVariation = (Math.random() * 0.15) + 0.15; // 0.15 - 0.30 közötti érték
+
+                if (currentRatio < 0.60) {
+                    changePercent = baseVariation;
+                    eventText = '📈 **DRASZTIKUS PIACI REAKCIÓ:** Hatalmas vásárlási hullám az alacsony áron! (+BULLISH)';
+                } else if (currentRatio > 1.80) {
+                    changePercent = -baseVariation;
+                    eventText = '📉 **MASSZÍV PROFITREALIZÁLÁS:** A befektetők tömegesen adják el a BTC-t!';
                 } else {
-                    const isBullish = Math.random() < 0.52;
-                    changePercent = isBullish ? (Math.random() * 0.06 + 0.01) : (Math.random() * -0.05 - 0.01);
+                    const isBullish = Math.random() < 0.50;
+                    changePercent = isBullish ? baseVariation : -baseVariation;
                 }
 
-                if (Math.random() < 0.30) {
+                if (Math.random() < 0.35) {
                     const newsEvents = [
-                        { text: '🟢 **NEWS FLASH:** Egy vezető ETF alap jóváhagyásra került! (+20%)', mult: 0.20 },
-                        { text: '🟢 **NEWS FLASH:** A világ legnagyobb kereskedelmi hálózata elfogadja a BTC-t! (+15%)', mult: 0.15 },
-                        { text: '🟢 **NEWS FLASH:** Elindult a globális bányászati halving esemény! (+12%)', mult: 0.12 },
-                        { text: '🔴 **NEWS FLASH:** Rövid távú szerverleállás történt az ázsiai bányászközpontokban! (-12%)', mult: -0.12 },
-                        { text: '🔴 **NEWS FLASH:** Makrogazdasági kamatváltozások óvatosságra intenek! (-10%)', mult: -0.10 }
+                        { text: '🟢 **NEWS FLASH:** Egy vezető ETF alap jóváhagyásra került! (+35%)', mult: 0.35 },
+                        { text: '🟢 **NEWS FLASH:** A világ legnagyobb kereskedelmi hálózata elfogadja a BTC-t! (+25%)', mult: 0.25 },
+                        { text: '🟢 **NEWS FLASH:** Elindult a globális bányászati halving esemény! (+20%)', mult: 0.20 },
+                        { text: '🔴 **NEWS FLASH:** Szigorú korlátozásokat jelentettek be az ázsiai bányászközpontokban! (-25%)', mult: -0.25 },
+                        { text: '🔴 **NEWS FLASH:** Egy nagy kriptotőzsde felfüggesztette a kifizetéseket! (-30%)', mult: -0.30 }
                     ];
                     const chosen = newsEvents[Math.floor(Math.random() * newsEvents.length)];
                     eventText = `📢 **PIACI HÍREK:**\n${chosen.text}`;
@@ -543,8 +546,8 @@ setInterval(async () => {
                 }
 
                 let newPrice = Math.floor(settings.btcPriceFt * (1 + changePercent));
-                const minPrice = BASE_BTC_PRICE * 0.50;
-                const maxPrice = BASE_BTC_PRICE * 2.20;
+                const minPrice = BASE_BTC_PRICE * 0.40;
+                const maxPrice = BASE_BTC_PRICE * 2.50;
 
                 if (newPrice < minPrice) newPrice = minPrice;
                 if (newPrice > maxPrice) newPrice = maxPrice;
@@ -681,6 +684,7 @@ const commands = [
         .addSubcommand(s => s.setName('statusz').setDescription('Státusz'))
         .addSubcommand(s => s.setName('torleszt').setDescription('Törlesztés').addIntegerOption(o => o.setName('osszeg').setDescription('Összeg').setRequired(true))),
     
+    // 🏆 /TOP PARANCS - KÖTELEZŐ SUBCOMMAND
     new SlashCommandBuilder().setName('top').setDescription('Toplisták megtekintése')
         .addSubcommand(s => s.setName('cash').setDescription('A leggazdagabb játékosok készpénz alapján'))
         .addSubcommand(s => s.setName('crypto').setDescription('A legtöbb Bitcoinnal rendelkező játékosok')),
@@ -2110,12 +2114,13 @@ client.on('interactionCreate', async (i) => {
 
                 const row1 = new ActionRowBuilder().addComponents(select);
                 const row2 = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️ Vissza a kategóriákhoz').setStyle(ButtonStyle.Secondary)
+                    new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
                 );
 
                 return i.update({ embeds: [new EmbedBuilder().setColor('#f7931a').setTitle(`🖥️ ${rarity.toUpperCase()} KÁRTYÁK`).setDescription('Válaszd ki a megvásárolni kívánt modellt!')], components: [row1, row2] });
             }
 
+            // ⚡ GYORSABB KÁRTYAVÁSÁRLÁS KEZELÉS (NEM ZÁRJA BE A MENÜT)
             if (i.customId.startsWith('select_buy_gpu')) {
                 const gpuId = i.values[0];
                 const gpu = GPUS[gpuId];
@@ -2135,7 +2140,19 @@ client.on('interactionCreate', async (i) => {
                 userDb.rigs.push({ gpuId: gpu.id, name: gpu.name, btcPerHour: gpu.btcPerHour });
                 await userDb.save();
 
-                return i.reply({ content: `🎉 Sikeresen megvásároltad a következőt: **${gpu.name}** (**${formatFt(gpu.price)}**)!`, ephemeral: true });
+                const updatedGpuCount = userDb.rigs.length;
+                const embed = new EmbedBuilder()
+                    .setColor('#2ecc71')
+                    .setTitle('🎉 SIKERES VIDEOKÁRTYA VÁSÁRLÁS!')
+                    .setDescription(`Sikeresen megvásároltad a következőt: **${gpu.name}**!\n\n💳 **Új Készpénz Egyenleg:** ${formatFt(userDb.balance)}\n📦 **Szerverterem Kapacitás:** ${updatedGpuCount}/${roomInfo.maxGpus} kártya`)
+                    .setFooter({ text: 'Válassz újabb kártyát, vagy lépj vissza a főmenübe!' });
+
+                const row = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`miner_menu_gpus_${i.user.id}`).setLabel('🛒 Újabb kártya vásárlása').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
+                );
+
+                return i.update({ embeds: [embed], components: [row] });
             }
 
             if (i.customId.startsWith('select_buy_room')) {
