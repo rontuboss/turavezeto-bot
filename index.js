@@ -25,7 +25,6 @@ const CONFIG = {
 const BASE_BTC_PRICE = 35000000;
 let isMaintenanceMode = false;
 
-// Process összeomlás elleni védelem (Uncaught Exception Handler)
 process.on('uncaughtException', (err) => {
     console.error('⚠️ ELKAPOTT FATÁLIS HIBA (a bot nem áll le):', err);
 });
@@ -159,98 +158,11 @@ async function syncUserGpuStats() {
 }
 
 // ==========================================
-// 4. HELPER & CHART GENERATOR LOGIC
+// 4. HELPER LOGIC
 // ==========================================
 const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' Ft';
 const formatBtc = (amount) => (amount || 0).toFixed(8) + ' BTC';
 const formatBtcWithFt = (btcAmount, priceFt) => `${formatBtc(btcAmount)} (~${formatFt(Math.floor((btcAmount || 0) * priceFt))})`;
-
-function getCryptoChartUrl(historyArray) {
-    try {
-        let prices = Array.isArray(historyArray) ? [...historyArray] : [BASE_BTC_PRICE];
-        while (prices.length < 10) {
-            prices.unshift(prices[0] || BASE_BTC_PRICE);
-        }
-        prices = prices.slice(-10);
-
-        const labels = prices.map((_, idx) => {
-            const totalMinutesAgo = (prices.length - 1 - idx) * 30;
-            if (totalMinutesAgo === 0) return 'MOST';
-            const hours = Math.floor(totalMinutesAgo / 60);
-            const mins = totalMinutesAgo % 60;
-            if (hours === 0) return `-${mins}m`;
-            if (mins === 0) return `-${hours}h`;
-            return `-${hours}h${mins}m`;
-        });
-
-        const minP = Math.min(...prices);
-        const maxP = Math.max(...prices);
-        const padding = (maxP - minP) * 0.25 || BASE_BTC_PRICE * 0.05;
-
-        const candleData = prices.map((price, idx) => {
-            const prev = idx === 0 ? price : prices[idx - 1];
-            const high = Math.max(prev, price) + Math.floor(price * 0.002);
-            const low = Math.min(prev, price) - Math.floor(price * 0.002);
-            return { o: prev, h: high, l: low, c: price };
-        });
-
-        const chartConfig = {
-            type: 'candlestick',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: 'BTC/HUF',
-                    data: candleData,
-                    color: {
-                        up: '#2ecc71',
-                        down: '#e74c3c',
-                        unchanged: '#2ecc71'
-                    }
-                }]
-            },
-            options: {
-                legend: { display: false },
-                title: { 
-                    display: true, 
-                    text: '🪙 BITCOIN (BTC/HUF) - 10 FRISSÍTÉS GYERTYADIAGRAM', 
-                    fontColor: '#ffffff', 
-                    fontSize: 13 
-                },
-                plugins: {
-                    datalabels: {
-                        display: true,
-                        align: 'top',
-                        anchor: 'end',
-                        color: '#ffffff',
-                        font: { weight: 'bold', size: 9 },
-                        formatter: (val) => (val && val.c ? (val.c / 1000000).toFixed(2) + 'M Ft' : '')
-                    }
-                },
-                scales: {
-                    xAxes: [{ 
-                        gridLines: { color: 'rgba(255, 255, 255, 0.1)' }, 
-                        ticks: { fontColor: '#ffffff', fontSize: 10 } 
-                    }],
-                    yAxes: [{ 
-                        gridLines: { color: 'rgba(255, 255, 255, 0.1)' }, 
-                        ticks: { 
-                            min: Math.floor(minP - padding),
-                            max: Math.ceil(maxP + padding),
-                            fontColor: '#aaaaaa',
-                            fontSize: 9,
-                            callback: (val) => (val / 1000000).toFixed(1) + 'M Ft' 
-                        } 
-                    }]
-                }
-            }
-        };
-
-        return `https://quickchart.io/chart?bkg=%2318191c&w=650&h=320&v=2.9&plugins=chartjs-plugin-datalabels,financial&c=${encodeURIComponent(JSON.stringify(chartConfig))}`;
-    } catch (err) {
-        console.error('Chart generálási hiba:', err);
-        return 'https://quickchart.io/chart?c=%7Btype%3A%27line%27%2Cdata%3A%7Blabels%3A%5B1%2C2%5D%2Cdatasets%3A%5B%7Bdata%3A%5B1%2C2%5D%7D%5D%7D%7D';
-    }
-}
 
 const getBudapestDate = () => new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Budapest" }));
 const getBudapestMidnightMs = () => {
@@ -598,13 +510,11 @@ setInterval(async () => {
                 if (minerCh) {
                     const diffPercent = (((newPrice - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
                     const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
-                    const chartUrl = getCryptoChartUrl(settings.btcHistory);
 
                     const btcEmbed = new EmbedBuilder()
                         .setColor(diffPercent >= 0 ? '#2ecc71' : '#e74c3c')
                         .setTitle('📊 30 PERCES BITCOIN ÁRFOLYAM JELENTÉS')
-                        .setDescription(`🪙 **1 BTC = ${formatFt(newPrice)}** (Összváltozás: \`${diffTag}\`)${eventText}`)
-                        .setImage(chartUrl);
+                        .setDescription(`🪙 **1 BTC = ${formatFt(newPrice)}** (Összváltozás: \`${diffTag}\`)${eventText}`);
 
                     minerCh.send({ embeds: [btcEmbed] }).catch(() => {});
                 }
@@ -848,11 +758,11 @@ client.on('messageCreate', async (m) => {
         if (cmd === '.botstop') {
             isMaintenanceMode = true;
             updateStatus(m.guild);
-            return m.reply('🛑 **BOT TELJESEN LEÁLLÍTVA!** A felhasználók elől a parancsok zárolva lettek (csak te tudod használni őket).').catch(() => {});
+            return m.reply('🛑 **BOT TELJESEN LEÁLLÍTVA!** A parancsok lezárva mindenkinek!').catch(() => {});
         } else if (cmd === '.botstart') {
             isMaintenanceMode = false;
             updateStatus(m.guild);
-            return m.reply('🚀 **BOT ELINDÍTVA!** A bot újra használható mindenkinek!').catch(() => {});
+            return m.reply('🚀 **BOT ELINDÍTVA!** A bot újra használható!').catch(() => {});
         }
     }
 
@@ -882,7 +792,7 @@ client.on('messageCreate', async (m) => {
 // ==========================================
 client.on('messageReactionAdd', async (reaction, user) => {
     if (user.bot || !reaction.message.guild) return;
-    if (isMaintenanceMode && user.id !== CONFIG.FIXED_USER_ID) return;
+    if (isMaintenanceMode) return; // Leállítás esetén letiltva
     if (reaction.emoji.name !== '✅') return;
 
     try {
@@ -931,14 +841,13 @@ client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton() && !i.isStringSelectMenu()) return;
 
     try {
-        const isOwner = (i.user.id === CONFIG.FIXED_USER_ID);
-
-        // 🔒 Karbantartási / Leállítási mód blokkolás
-        if (isMaintenanceMode && !isOwner) {
-            return i.reply({ content: '🛑 **A bot jelenleg le van állítva!** A parancsok ideiglenesen fel vannak függesztve.', ephemeral: true }).catch(() => {});
+        // 🔒 ZÁROLÁS: Ha a bot stop módban van, SENKI (még a tulajdonos sem) tud Slash parancsot használni
+        if (isMaintenanceMode) {
+            return i.reply({ content: '🛑 **A BOT LE VAN ÁLLÍTVA!** Jelenleg semmilyen parancs nem használható. A tulajdonos `.botstart` parancsával indítható újra.', ephemeral: true }).catch(() => {});
         }
 
         if (i.isChatInputCommand()) {
+            const isOwner = (i.user.id === CONFIG.FIXED_USER_ID);
             const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE) || isOwner;
             const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
             const allowedForMembers = ['coinflip', 'achievements', 'quests', 'mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'hitel', 'btc', 'miner', 'crypto'];
@@ -957,23 +866,22 @@ client.on('interactionCreate', async (i) => {
                 const sub = i.options.getSubcommand();
 
                 if (sub === 'ar') {
-                    await i.deferReply();
-
                     const diffPercent = (((settings.btcPriceFt - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
                     const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
                     
-                    const chartUrl = getCryptoChartUrl(settings.btcHistory || [BASE_BTC_PRICE]);
+                    const history = settings.btcHistory && settings.btcHistory.length > 0 ? settings.btcHistory : [BASE_BTC_PRICE];
+                    const historyText = history.map((p, idx) => `**#${idx + 1}:** ${formatFt(p)}`).join('\n');
 
                     const embed = new EmbedBuilder()
                         .setColor(diffPercent >= 0 ? '#2ecc71' : '#e74c3c')
-                        .setTitle('📈 BITCOIN ÁRFOLYAM & TRADING GRAFIKON')
+                        .setTitle('📈 BITCOIN ÁRFOLYAM JELENTÉS')
                         .addFields(
                             { name: '🪙 Jelenlegi Árfolyam', value: `**1 BTC = ${formatFt(settings.btcPriceFt)}**`, inline: true },
-                            { name: '📊 Összesített Változás', value: `\`\`\`diff\n${diffTag}\`\`\``, inline: true }
-                        )
-                        .setImage(chartUrl);
+                            { name: '📊 Változás', value: `\`\`\`diff\n${diffTag}\`\`\``, inline: true },
+                            { name: '📜 Utolsó Árfolyamok', value: historyText || 'Nincs elmentett adatsor', inline: false }
+                        );
 
-                    return i.editReply({ embeds: [embed] });
+                    return i.reply({ embeds: [embed] });
                 }
 
                 if (sub === 'sell') {
@@ -1018,7 +926,6 @@ client.on('interactionCreate', async (i) => {
                 const sub = i.options.getSubcommand();
 
                 if (sub === 'farm') {
-                    await i.deferReply();
                     const targetUser = i.options.getUser('user') || i.user;
                     const isSelf = targetUser.id === i.user.id;
                     const targetDb = isSelf ? userDb : await getUserDb(i.guild.id, targetUser.id);
@@ -1083,7 +990,7 @@ client.on('interactionCreate', async (i) => {
                         components.push(row);
                     }
 
-                    return i.editReply({ embeds: [embed], components });
+                    return i.reply({ embeds: [embed], components });
                 }
 
                 if (sub === 'claim') {
@@ -1512,7 +1419,6 @@ client.on('interactionCreate', async (i) => {
             }
 
             if (i.commandName === 'top') {
-                await i.deferReply();
                 const sub = i.options.getSubcommand();
 
                 if (sub === 'cash') {
@@ -1533,7 +1439,7 @@ client.on('interactionCreate', async (i) => {
                         .setTitle('🏆 Szerver Pénzügyi Toplista & Kaszinó Statisztika')
                         .setDescription(desc || 'Még senkinek sincs pénze.');
                     
-                    return i.editReply({ embeds: [embed] });
+                    return i.reply({ embeds: [embed] });
                 }
 
                 if (sub === 'crypto') {
@@ -1553,15 +1459,14 @@ client.on('interactionCreate', async (i) => {
                         .setTitle('🪙 Szerver Top Kripto Bányászok')
                         .setDescription(desc);
 
-                    return i.editReply({ embeds: [embed] });
+                    return i.reply({ embeds: [embed] });
                 }
             }
 
             if (i.commandName === 'mines') {
-                await i.deferReply();
                 const bet = i.options.getInteger('bet');
                 const bombs = i.options.getInteger('bombs');
-                if (userDb.balance < bet) return i.editReply({ content: '❌ Nincs elég egyenleged a játék elindításához!' });
+                if (userDb.balance < bet) return i.reply({ content: '❌ Nincs elég egyenleged a játék elindításához!', ephemeral: true });
 
                 userDb.balance -= bet;
                 await userDb.save();
@@ -1577,7 +1482,7 @@ client.on('interactionCreate', async (i) => {
                 const embed = createMinesEmbed(bet, bombs, 0, 1.00, bet);
                 const rows = buildMinesComponents(game);
 
-                const msg = await i.editReply({ embeds: [embed], components: rows });
+                const msg = await i.reply({ embeds: [embed], components: rows, fetchReply: true });
                 game.msgId = msg.id;
                 await msg.react('✅');
 
@@ -1647,59 +1552,47 @@ client.on('interactionCreate', async (i) => {
             }
 
             if (['iq', 'meret'].includes(i.commandName)) {
-                await i.deferReply({ ephemeral: true });
                 if (i.commandName === 'iq') {
                     const target = i.options.getUser('user') || i.user;
                     const iqVal = Math.floor(Math.random() * 251) - 50;
                     let comment = iqVal < 0 ? "Néha elfelejt levegőt venni. 🧠❌" : (iqVal < 50 ? "A gombalevest is villával eszi. 🥣" : (iqVal < 100 ? "Nem a legélesebb kés a fiókban. 🗡️" : "Smart koponya! 💡"));
-                    await i.channel.send({ content: `🧠 **<@${target.id}>** IQ teszt eredménye: **${iqVal} IQ**\n*Értékelés:* ${comment}` });
-                    await i.deleteReply().catch(() => {});
+                    return i.reply({ content: `🧠 **<@${target.id}>** IQ teszt eredménye: **${iqVal} IQ**\n*Értékelés:* ${comment}` });
                 } else if (i.commandName === 'meret') {
                     const target = i.options.getUser('user') || i.user;
                     const sizeNum = Math.floor(Math.random() * 30) + 1;
-                    await i.channel.send({ content: `🍆 **<@${target.id}>** fasz mérete: **8${'='.repeat(sizeNum)}D** (${sizeNum} cm)` });
-                    await i.deleteReply().catch(() => {});
+                    return i.reply({ content: `🍆 **<@${target.id}>** fasz mérete: **8${'='.repeat(sizeNum)}D** (${sizeNum} cm)` });
                 }
-                return;
             }
 
             if (['fakeban', 'nitro', 'mock', 'roulette', 'roast', 'rate'].includes(i.commandName)) {
-                await i.deferReply({ ephemeral: true });
                 if (i.commandName === 'fakeban') {
                     const user = i.options.getUser('user');
                     const reason = i.options.getString('reason') || 'Nincs megadva';
                     const banEmbed = new EmbedBuilder().setColor('#ff0000').setTitle('🔨 Tag Kitiltva!').setDescription(`**Felhasználó:** <@${user.id}>\n**Indok:** ${reason}\n**Moderátor:** Adminisztráció`);
-                    const msg = await i.channel.send({ embeds: [banEmbed] });
-                    await i.deleteReply().catch(() => {});
-                    setTimeout(() => msg.edit({ embeds: [new EmbedBuilder().setColor('#ffaa00').setTitle('🤡 CSAK VICCELTEM!').setDescription(`**<@${user.id}>** nem lett kitiltva, maradhatsz! 🎉`)] }).catch(() => {}), 3000);
+                    await i.reply({ embeds: [banEmbed] });
+                    setTimeout(() => i.editReply({ embeds: [new EmbedBuilder().setColor('#ffaa00').setTitle('🤡 CSAK VICCELTEM!').setDescription(`**<@${user.id}>** nem lett kitiltva, maradhatsz! 🎉`)] }).catch(() => {}), 3000);
                 } else if (i.commandName === 'nitro') {
                     const embed = new EmbedBuilder().setColor('#5865F2').setTitle('🎁 Discord Nitro Gift!').setDescription('Nyertél 1 hónap Discord Nitro-t! Kattints az alábbi gombra az átvételhez!').setThumbnail('https://i.imgur.com/264293f.png');
                     const btn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_fake_nitro').setLabel('🎁 Claim Nitro').setStyle(ButtonStyle.Success));
-                    await i.channel.send({ embeds: [embed], components: [btn] });
-                    await i.deleteReply().catch(() => {});
+                    return i.reply({ embeds: [embed], components: [btn] });
                 } else if (i.commandName === 'mock') {
                     const mocked = i.options.getString('text').split('').map((c, idx) => idx % 2 === 0 ? c.toLowerCase() : c.toUpperCase()).join('');
-                    await i.channel.send({ content: `${mocked} 🤡` });
-                    await i.deleteReply().catch(() => {});
+                    return i.reply({ content: `${mocked} 🤡` });
                 } else if (i.commandName === 'roulette') {
                     if (Math.floor(Math.random() * 6) === 0) {
                         await i.member.timeout(60 * 1000, 'Orosz rulett vesztes').catch(() => {});
-                        await i.channel.send({ content: `💥 **BANG!** <@${i.user.id}> meghúzta a ravaszt, a fegyver eldördült! (1 perc némítás) 🪦` });
+                        return i.reply({ content: `💥 **BANG!** <@${i.user.id}> meghúzta a ravaszt, a fegyver eldördült! (1 perc némítás) 🪦` });
                     } else {
-                        await i.channel.send({ content: `*KIKK...* <@${i.user.id}> meghúzta a ravaszt, a fegyver nem sült el. Túlélte! 🎯` });
+                        return i.reply({ content: `*KIKK...* <@${i.user.id}> meghúzta a ravaszt, a fegyver nem sült el. Túlélte! 🎯` });
                     }
-                    await i.deleteReply().catch(() => {});
                 } else if (i.commandName === 'roast') {
                     const target = i.options.getUser('user');
                     const roasts = ["Mikor Isten az észt osztotta, te valószínűleg a sor végén álltál egy törött csészével. ☕", "Olyan vagy, mint a felhős idő: ha eltűnsz, mindenkinek szebb lesz a napja. ☀️", "Ha az ostobaság fájna, egész nap üvöltenél. 🔊"];
-                    await i.channel.send({ content: `🔥 **<@${target.id}>**: ${roasts[Math.floor(Math.random() * roasts.length)]}` });
-                    await i.deleteReply().catch(() => {});
+                    return i.reply({ content: `🔥 **<@${target.id}>**: ${roasts[Math.floor(Math.random() * roasts.length)]}` });
                 } else if (i.commandName === 'rate') {
                     const rating = Math.floor(Math.random() * 10) + 1;
-                    await i.channel.send({ content: `⭐ Értékelés: **"${i.options.getString('thing')}"**\n📊 Eredmény: **${rating}/10**` });
-                    await i.deleteReply().catch(() => {});
+                    return i.reply({ content: `⭐ Értékelés: **"${i.options.getString('thing')}"**\n📊 Eredmény: **${rating}/10**` });
                 }
-                return;
             }
 
             if (i.commandName === 'invites') {
@@ -1746,9 +1639,8 @@ client.on('interactionCreate', async (i) => {
                 } else if (sub === 'reroll') {
                     const msgId = i.options.getString('message_id');
                     const count = i.options.getInteger('winners') || 1;
-                    await i.reply({ content: '⏳ Feldolgozás...', ephemeral: true });
                     const gwData = await Giveaway.findOne({ messageId: msgId });
-                    if (!gwData) return i.editReply({ content: '❌ Nem található!' });
+                    if (!gwData) return i.reply({ content: '❌ Nem található!', ephemeral: true });
 
                     const ch = i.guild.channels.cache.get(gwData.channelId);
                     const msg = await ch?.messages.fetch(gwData.messageId).catch(() => null);
@@ -1764,7 +1656,7 @@ client.on('interactionCreate', async (i) => {
                             if (fetched.size < 100) break;
                         }
                     }
-                    if (!validUsers.length) return i.editReply({ content: '❌ Nincs érvényes jelentkező!' });
+                    if (!validUsers.length) return i.reply({ content: '❌ Nincs érvényes jelentkező!', ephemeral: true });
 
                     const members = await i.guild.members.fetch({ user: validUsers }).catch(() => new Map());
                     const participants = validUsers.map(uId => ({ id: uId, weight: members.get(uId)?.premiumSince ? 100 + gwData.boosterBonus : 100 }));
@@ -1772,15 +1664,14 @@ client.on('interactionCreate', async (i) => {
                     const mentions = winners.map(id => `<@${id}>`).join(' ');
 
                     await ch.send(`🎲 **Újrasorsolás (${winners.length} új nyertes)!** Nyeremény: **${gwData.prize}**!\n\n${mentions}`);
-                    return i.editReply({ content: `✅ Kisorsolva ${winners.length} új nyertes!` });
+                    return i.reply({ content: `✅ Kisorsolva ${winners.length} új nyertes!`, ephemeral: true });
                 } else if (sub === 'end') {
                     const msgId = i.options.getString('message_id');
-                    await i.reply({ content: '⏳ Feldolgozás...', ephemeral: true });
                     const gwData = await Giveaway.findOne({ messageId: msgId });
-                    if (!gwData) return i.editReply({ content: '❌ Nem található!' });
+                    if (!gwData) return i.reply({ content: '❌ Nem található!', ephemeral: true });
                     gwData.ended = false;
                     await endGiveaway(gwData);
-                    return i.editReply({ content: '✅ Lezárva és kisorsolva!' });
+                    return i.reply({ content: '✅ Lezárva és kisorsolva!', ephemeral: true });
                 }
             }
         }
@@ -2137,6 +2028,7 @@ client.on('interactionCreate', async (i) => {
             }
 
             if (i.customId === 'close_ticket') {
+                const isOwner = (i.user.id === CONFIG.FIXED_USER_ID);
                 if (!i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE) && !isOwner) return i.reply({ content: '❌ Nincs jogod!', ephemeral: true });
                 await i.reply({ content: '🔒 Ticket lezárása...' });
                 try {
@@ -2264,9 +2156,7 @@ client.on('interactionCreate', async (i) => {
         }
     } catch (err) {
         console.error('Hiba az interakció során:', err);
-        if (i.deferred || i.replied) {
-            await i.editReply({ content: '❌ Hiba történt a parancs feldolgozása közben!' }).catch(() => {});
-        } else {
+        if (!i.replied && !i.deferred) {
             await i.reply({ content: '❌ Hiba történt a parancs feldolgozása közben!', ephemeral: true }).catch(() => {});
         }
     }
