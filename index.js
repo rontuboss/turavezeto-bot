@@ -324,7 +324,7 @@ function drawWinners(participants, count) {
 const updateStatus = (g) => {
     if (!g) return;
     if (isMaintenanceMode) {
-        client.user.setPresence({ activities: [{ name: `🛠️ KARBANTARTÁS ÁLLAPOTBAN`, type: 0 }], status: 'dnd' });
+        client.user.setPresence({ activities: [{ name: `🛑 BOT LEÁLLÍTVA / KARBANTARTÁS`, type: 0 }], status: 'dnd' });
     } else {
         client.user.setPresence({ activities: [{ name: `👥 ${g.memberCount} tag | /coinflip`, type: 4 }], status: 'online' });
     }
@@ -560,7 +560,7 @@ setInterval(async () => {
                         { text: '🟢 **NEWS FLASH:** Egy vezető ETF alap jóváhagyásra került! (+20%)', mult: 0.20 },
                         { text: '🟢 **NEWS FLASH:** A világ legnagyobb kereskedelmi hálózata elfogadja a BTC-t! (+15%)', mult: 0.15 },
                         { text: '🟢 **NEWS FLASH:** Elindult a globális bányászati halving esemény! (+12%)', mult: 0.12 },
-                        { text: '🔴 **NEWS FLASH:** Rövid távú szerverleállás történt az ázsiai bányáksz-központokban! (-12%)', mult: -0.12 },
+                        { text: '🔴 **NEWS FLASH:** Rövid távú szerverleállás történt az ázsiai bányászközpontokban! (-12%)', mult: -0.12 },
                         { text: '🔴 **NEWS FLASH:** Makrogazdasági kamatváltozások óvatosságra intenek! (-10%)', mult: -0.10 }
                     ];
                     const chosen = newsEvents[Math.floor(Math.random() * newsEvents.length)];
@@ -825,20 +825,21 @@ client.on('messageCreate', async (m) => {
         }
     }
 
-    // 🛠️ KARBANTARTÁS MÓD KAPCSOLÁSA (TOGGLE ES .MAINTENANCEEND)
-    if (cmd === '.maintenance' || cmd === '.maintenanceend') {
+    // 🛑 BOT LEÁLLÍTÁS ÉS INDÍTÁS KEZELÉS (.botstop / .botstart)
+    if (cmd === '.botstop' || cmd === '.botstart') {
         if (m.author.id !== CONFIG.FIXED_USER_ID) {
-            return m.reply('❌ Nincs jogosultságod a karbantartás mód használatához! Kizárólag a bot tulajdonosa indíthatja el.').catch(() => {});
+            return m.reply('❌ Nincs jogosultságod ehhez a parancshoz! Kizárólag a bot tulajdonosa indíthatja el vagy állíthatja le.').catch(() => {});
         }
 
-        if (cmd === '.maintenanceend') {
+        if (cmd === '.botstop') {
+            isMaintenanceMode = true;
+            updateStatus(m.guild);
+            return m.reply('🛑 **BOT TELJESEN LEÁLLÍTVA!** A felhasználók elől a parancsok zárolva lettek (csak te tudod használni őket).').catch(() => {});
+        } else if (cmd === '.botstart') {
             isMaintenanceMode = false;
-        } else {
-            isMaintenanceMode = !isMaintenanceMode;
+            updateStatus(m.guild);
+            return m.reply('🚀 **BOT ELINDÍTVA!** A bot újra használható mindenkinek!').catch(() => {});
         }
-
-        updateStatus(m.guild);
-        return m.reply(isMaintenanceMode ? '🛠️ **KARBANTARTÁS MÓD BEKAPCSOLVA!** A felhasználók elől a parancsok zárolva lettek.' : '✅ **KARBANTARTÁS MÓD KIKAPCSOLVA!** A bot újra használható mindenkinek.').catch(() => {});
     }
 
     if (Math.random() < 0.015) m.react(Math.random() < 0.5 ? '🤡' : '🤓').catch(() => {});
@@ -915,9 +916,9 @@ client.on('interactionCreate', async (i) => {
 
     const isOwner = (i.user.id === CONFIG.FIXED_USER_ID);
 
-    // 🔒 Karbantartási mód blokkolás (A tulajdonosnak szabad utat enged)
+    // 🔒 Karbantartási / Leállítási mód blokkolás (A tulajdonosnak szabad utat enged)
     if (isMaintenanceMode && !isOwner) {
-        return i.reply({ content: '⚠️ **A bot jelenleg karbantartás alatt áll!** A parancsok ideiglenesen le vannak tiltva.', ephemeral: true });
+        return i.reply({ content: '🛑 **A bot jelenleg le van állítva!** A parancsok ideiglenesen fel vannak függesztve.', ephemeral: true });
     }
 
     if (i.isChatInputCommand()) {
@@ -2161,7 +2162,7 @@ client.on('interactionCreate', async (i) => {
 
             const row1 = new ActionRowBuilder().addComponents(select);
             const row2 = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`miner_menu_gpus_${i.user.id}`).setLabel('◀️ Vissza a kategóriákhoz').setStyle(ButtonStyle.Secondary)
+                new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️ Vissza a kategóriákhoz').setStyle(ButtonStyle.Secondary)
             );
 
             return i.update({ embeds: [new EmbedBuilder().setColor('#f7931a').setTitle(`🖥️ ${rarity.toUpperCase()} KÁRTYÁK`).setDescription('Válaszd ki a megvásárolni kívánt modellt!')], components: [row1, row2] });
