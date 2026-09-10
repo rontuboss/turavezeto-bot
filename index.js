@@ -101,7 +101,7 @@ const activeCoinflips = new Map();
 const commandCooldowns = new Map();
 
 // ==========================================
-// 3. HARDVER & KINCS ADATOK
+// 3. HARDVER ADATOK
 // ==========================================
 const ROOMS = {
     alagsor: { name: '📦 Alagsori Doboz', price: 0, maxGpus: 4, failChance: 0.12, multiplier: 1.0 },
@@ -151,7 +151,7 @@ async function syncUserGpuStats() {
                 updatedCount++;
             }
         }
-        if (updatedCount > 0) console.log(`🔄 ${updatedCount} felhasználó videokártyái sikeresen frissítve!`);
+        if (updatedCount > 0) console.log(`🔄 ${updatedCount} felhasználó videokártyái frissítve!`);
     } catch (err) {
         console.error('❌ Hiba a kártyák szinkronizálásakor:', err);
     }
@@ -486,7 +486,7 @@ setInterval(async () => {
                         { text: '🟢 **NEWS FLASH:** Egy vezető ETF alap jóváhagyásra került! (+20%)', mult: 0.20 },
                         { text: '🟢 **NEWS FLASH:** A világ legnagyobb kereskedelmi hálózata elfogadja a BTC-t! (+15%)', mult: 0.15 },
                         { text: '🟢 **NEWS FLASH:** Elindult a globális bányászati halving esemény! (+12%)', mult: 0.12 },
-                        { text: '🔴 **NEWS FLASH:** Rövid távú szerverleállás történt az ázsiai bányászközpontokban! (-12%)', mult: -0.12 },
+                        { text: '🔴 **NEWS FLASH:** Rövid távú szerverleállás történt az ázsiai bányákközpontokban! (-12%)', mult: -0.12 },
                         { text: '🔴 **NEWS FLASH:** Makrogazdasági kamatváltozások óvatosságra intenek! (-10%)', mult: -0.10 }
                     ];
                     const chosen = newsEvents[Math.floor(Math.random() * newsEvents.length)];
@@ -739,7 +739,7 @@ client.on('messageCreate', async (m) => {
             const resetEmbed = new EmbedBuilder()
                 .setColor('#ff0000')
                 .setTitle('🔄 TELJES SZEZON RESET VÉGREHAJTVA!')
-                .setDescription('**A szerver gazdasága és bányászati rendszere teljesen újraindult!**\n\n• Minden játékos egyenlege és BTC-je nullázódott.\n• A szervertermek, rigek és hűtők törlésre kerültek.\n• A statisztikák, küldetések és mérföldkövek törlődtek.')
+                .setDescription('**A szerver gazdasága és bányászati rendszere teljesen újraindult!**')
                 .setTimestamp();
 
             return m.reply({ embeds: [resetEmbed] });
@@ -792,7 +792,7 @@ client.on('messageCreate', async (m) => {
 // ==========================================
 client.on('messageReactionAdd', async (reaction, user) => {
     if (user.bot || !reaction.message.guild) return;
-    if (isMaintenanceMode) return; // Leállítás esetén letiltva
+    if (isMaintenanceMode) return; 
     if (reaction.emoji.name !== '✅') return;
 
     try {
@@ -841,20 +841,17 @@ client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton() && !i.isStringSelectMenu()) return;
 
     try {
-        // 🔒 ZÁROLÁS: Ha a bot stop módban van, SENKI (még a tulajdonos sem) tud Slash parancsot használni
+        // 🔒 ZÁROLÁS 1: Karbantartás mód
         if (isMaintenanceMode) {
             return i.reply({ content: '🛑 **A BOT LE VAN ÁLLÍTVA!** Jelenleg semmilyen parancs nem használható. A tulajdonos `.botstart` parancsával indítható újra.', ephemeral: true }).catch(() => {});
         }
 
+        // 👑 ZÁROLÁS 2: KIZÁRÓLAG A TE ID-D TUDJA HASZNÁLNI A SLASH PARANCSOKAT!
+        if (i.user.id !== CONFIG.FIXED_USER_ID) {
+            return i.reply({ content: '❌ **Ez a parancs kizárólag a bot tulajdonosa számára érhető el!**', ephemeral: true }).catch(() => {});
+        }
+
         if (i.isChatInputCommand()) {
-            const isOwner = (i.user.id === CONFIG.FIXED_USER_ID);
-            const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE) || isOwner;
-            const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
-            const allowedForMembers = ['coinflip', 'achievements', 'quests', 'mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'hitel', 'btc', 'miner', 'crypto'];
-
-            if (!isMember) return i.reply({ content: '❌ Nincs meg a szükséges rangod a parancsok használatához!', ephemeral: true });
-            if (!allowedForMembers.includes(i.commandName) && !isStaff) return i.reply({ content: '❌ Ez a parancs kizárólag a kijelölt rangosoknak érhető el!', ephemeral: true });
-
             const userDb = await getUserDb(i.guild.id, i.user.id);
             const settings = await getGuildSettings(i.guild.id);
 
@@ -866,11 +863,38 @@ client.on('interactionCreate', async (i) => {
                 const sub = i.options.getSubcommand();
 
                 if (sub === 'ar') {
+                    await i.deferReply();
+
                     const diffPercent = (((settings.btcPriceFt - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
                     const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
                     
+                    // ⚡ KIZÁRÓLAG AZ UTOLSÓ 5 PONT A KÉPI ÁBRÁZOLÁSHOZ
                     const history = settings.btcHistory && settings.btcHistory.length > 0 ? settings.btcHistory : [BASE_BTC_PRICE];
-                    const historyText = history.map((p, idx) => `**#${idx + 1}:** ${formatFt(p)}`).join('\n');
+                    const last5 = history.slice(-5);
+                    const labels = last5.map((_, idx) => `#${idx + 1}`);
+
+                    const chartConfig = {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'BTC Árfolyam (Ft)',
+                                data: last5,
+                                borderColor: diffPercent >= 0 ? 'rgb(46, 204, 113)' : 'rgb(231, 76, 60)',
+                                backgroundColor: diffPercent >= 0 ? 'rgba(46, 204, 113, 0.1)' : 'rgba(231, 76, 60, 0.1)',
+                                fill: true,
+                                tension: 0.3
+                            }]
+                        },
+                        options: {
+                            title: { display: true, text: 'Bitcoin Árfolyam alakulása (Utolsó 5 frissítés)' },
+                            legend: { display: false }
+                        }
+                    };
+
+                    const chartUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&w=500&h=250&bkg=transparent`;
+
+                    const historyText = last5.map((p, idx) => `**#${idx + 1}:** ${formatFt(p)}`).join('\n');
 
                     const embed = new EmbedBuilder()
                         .setColor(diffPercent >= 0 ? '#2ecc71' : '#e74c3c')
@@ -878,10 +902,15 @@ client.on('interactionCreate', async (i) => {
                         .addFields(
                             { name: '🪙 Jelenlegi Árfolyam', value: `**1 BTC = ${formatFt(settings.btcPriceFt)}**`, inline: true },
                             { name: '📊 Változás', value: `\`\`\`diff\n${diffTag}\`\`\``, inline: true },
-                            { name: '📜 Utolsó Árfolyamok', value: historyText || 'Nincs elmentett adatsor', inline: false }
-                        );
+                            { name: '📜 Utolsó 5 Árfolyam', value: historyText || 'Nincs adatsor', inline: false }
+                        )
+                        .setImage(chartUrl);
 
-                    return i.reply({ embeds: [embed] });
+                    return i.editReply({ embeds: [embed] }).catch(() => {
+                        // Ha a kép betöltése meghiúsulna, elküldi kép nélkül, hogy ne ragadjon be
+                        embed.setImage(null);
+                        return i.editReply({ embeds: [embed] });
+                    });
                 }
 
                 if (sub === 'sell') {
@@ -1746,7 +1775,7 @@ client.on('interactionCreate', async (i) => {
                 const embed = new EmbedBuilder()
                     .setColor('#00f2fe')
                     .setTitle('🏢 SZERVERTEREM BŐVÍTÉS')
-                    .setDescription('Vásárolj nagyobb helyiséget több helyért, kevesebb meghibásodásért és extra bónuszért!\n*(Megjegyzés: Az Alagsori Doboz az alapértelmezett ingyenes kezdő szobád.)*')
+                    .setDescription('Vásárolj nagyobb helyiséget több helyért, kevesebb meghibásodásért és extra bónuszért!')
                     .addFields(
                         { name: '🏠 Garázs Rig', value: `Ár: **${formatFt(5000000)}** | Férőhely: **12 db** | Hiba: **8%/óra** | Bónusz: **+10%**`, inline: false },
                         { name: '🏢 Hivatalos Szerverterem', value: `Ár: **${formatFt(35000000)}** | Férőhely: **25 db** | Hiba: **5%/óra** | Bónusz: **+25%**`, inline: false },
@@ -1774,7 +1803,7 @@ client.on('interactionCreate', async (i) => {
                 const embed = new EmbedBuilder()
                     .setColor('#e74c3c')
                     .setTitle('🌀 HŰTŐRENDSZER BOLT')
-                    .setDescription('Vásárolj jobb hűtést a szervertermedhez a meghibásodási esély lecsökkentésére!\n\n**Hűtőrendszerek hatása a túlmelegedésre:**')
+                    .setDescription('Vásárolj jobb hűtést a szervertermedhez a meghibásodási esély lecsökkentésére!')
                     .addFields(
                         { name: '❄️ Gyári Léghűtés (Alapértelmezett)', value: 'Ár: **Ingyenes** | Esély csökkentés: **0%**', inline: false },
                         { name: '🌀 Dupla Ventilátoros Hűtés', value: `Ár: **${formatFt(150000)}** | Esély csökkentés: **-1.0% / óra**`, inline: false },
