@@ -72,7 +72,7 @@ const GuildSetting = mongoose.model('GuildSetting', new mongoose.Schema({
     casinoLossVault: { type: Number, default: 0 },
     casinoWinVault: { type: Number, default: 0 },
     btcPriceFt: { type: Number, default: BASE_BTC_PRICE },
-    btcHistory: { type: [Number], default: [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE] }
+    btcHistory: { type: [Number], default: Array(10).fill(BASE_BTC_PRICE) }
 }));
 
 const Invite = mongoose.model('Invite', new mongoose.Schema({ guildId: String, userId: String, invites: Number }));
@@ -156,17 +156,28 @@ const formatFt = (amount) => new Intl.NumberFormat('hu-HU').format(amount) + ' F
 const formatBtc = (amount) => (amount || 0).toFixed(8) + ' BTC';
 const formatBtcWithFt = (btcAmount, priceFt) => `${formatBtc(btcAmount)} (~${formatFt(Math.floor((btcAmount || 0) * priceFt))})`;
 
-// 📊 DINAMIKUS TRADINGVIEW-STÍLUSÚ GRAFIKON GENERÁLÓ (QUICKCHART API)
+// 📊 10 FRISSÍTÉSES TRADINGVIEW GRAFIKON (ZÖLD / PIROS DINAMIKUS DÍSZÍTÉSSEL)
 function getCryptoChartUrl(historyArray) {
-    const prices = historyArray.slice(-6); // Utolsó max 6 adatpont
+    const prices = historyArray.slice(-10); // Utolsó 10 frissítés
+    
+    // Érthető időcímkék generálása (-4h 30m, -4h, ..., MOST)
     const labels = prices.map((_, idx) => {
-        const rem = (prices.length - 1 - idx) * 30;
-        return rem === 0 ? 'MOST' : `-${rem}m`;
+        const totalMinutesAgo = (prices.length - 1 - idx) * 30;
+        if (totalMinutesAgo === 0) return 'MOST';
+        const hours = Math.floor(totalMinutesAgo / 60);
+        const mins = totalMinutesAgo % 60;
+        if (hours === 0) return `-${mins}m`;
+        if (mins === 0) return `-${hours}h`;
+        return `-${hours}h ${mins}m`;
     });
 
-    const isUp = prices[prices.length - 1] >= prices[0];
+    // Ha az utolsó ár magasabb vagy egyenlő az előzőnél: ZÖLD (Bullish), egyébként PIROS (Bearish)
+    const lastPrice = prices[prices.length - 1];
+    const prevPrice = prices.length > 1 ? prices[prices.length - 2] : lastPrice;
+    const isUp = lastPrice >= prevPrice;
+
     const chartColor = isUp ? '#2ecc71' : '#e74c3c';
-    const bgGradient = isUp ? 'rgba(46, 204, 113, 0.15)' : 'rgba(231, 76, 60, 0.15)';
+    const bgGradient = isUp ? 'rgba(46, 204, 113, 0.2)' : 'rgba(231, 76, 60, 0.2)';
 
     const chartConfig = {
         type: 'line',
@@ -180,21 +191,38 @@ function getCryptoChartUrl(historyArray) {
                 fill: true,
                 backgroundColor: bgGradient,
                 pointBackgroundColor: chartColor,
-                pointRadius: 4,
-                lineTension: 0.3
+                pointBorderColor: '#ffffff',
+                pointRadius: 5,
+                pointHoverRadius: 7,
+                lineTension: 0.25
             }]
         },
         options: {
             legend: { display: false },
-            title: { display: true, text: '🪙 BITCOIN (BTC/HUF) TRADING GRAPH', fontColor: '#ffffff', fontSize: 14 },
+            title: { 
+                display: true, 
+                text: `🪙 BITCOIN (BTC/HUF) - UTOLSÓ 10 FRISSÍTÉS (${isUp ? '🟢 EMELKEDŐ TREND' : '🔴 CSÖKKENŐ TREND'})`, 
+                fontColor: '#ffffff', 
+                fontSize: 13 
+            },
             scales: {
-                xAxes: [{ gridLines: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { fontColor: '#aaaaaa' } }],
-                yAxes: [{ gridLines: { color: 'rgba(255, 255, 255, 0.1)' }, ticks: { fontColor: '#aaaaaa', callback: (val) => (val / 1000000).toFixed(1) + 'M Ft' } }]
+                xAxes: [{ 
+                    gridLines: { color: 'rgba(255, 255, 255, 0.08)' }, 
+                    ticks: { fontColor: '#bbbbbb', fontSize: 10 } 
+                }],
+                yAxes: [{ 
+                    gridLines: { color: 'rgba(255, 255, 255, 0.12)' }, 
+                    ticks: { 
+                        fontColor: '#ffffff',
+                        fontSize: 10,
+                        callback: (val) => (val / 1000000).toFixed(2) + 'M Ft' 
+                    } 
+                }]
             }
         }
     };
 
-    return `https://quickchart.io/chart?bkg=%2318191c&w=600&h=300&v=2.9&c=${encodeURIComponent(JSON.stringify(chartConfig))}`;
+    return `https://quickchart.io/chart?bkg=%2318191c&w=650&h=320&v=2.9&c=${encodeURIComponent(JSON.stringify(chartConfig))}`;
 }
 
 const getBudapestDate = () => new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Budapest" }));
@@ -216,7 +244,7 @@ const getUserDb = async (guildId, userId) => {
 async function getGuildSettings(guildId) {
     let settings = await GuildSetting.findOne({ guildId });
     if (!settings) {
-        settings = new GuildSetting({ guildId, casinoLossVault: 0, casinoWinVault: 0, btcPriceFt: BASE_BTC_PRICE, btcHistory: [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE] });
+        settings = new GuildSetting({ guildId, casinoLossVault: 0, casinoWinVault: 0, btcPriceFt: BASE_BTC_PRICE, btcHistory: Array(10).fill(BASE_BTC_PRICE) });
         await settings.save();
     }
     return settings;
@@ -429,7 +457,7 @@ function calculateHand(cards) {
 }
 
 // ==========================================
-// 7. TIMERS & BALANCED MARKET EVENTS (30 PERCES CHARTTAL)
+// 7. TIMERS & BALANCED MARKET EVENTS (30 PERCES 10-ES CHARTTAL)
 // ==========================================
 async function endGiveaway(gwData) {
     try {
@@ -489,14 +517,16 @@ setInterval(async () => {
     const minute = bpDate.getMinutes();
     const intervalKey = `${bpDate.getHours()}:${minute < 30 ? '00' : '30'}`;
 
-    // 🔥 30 PERCENKÉNTI KIEGYENSÚLYOZOTT ÁRFOLYAM FRISSÍTÉS + GRAFIKON
+    // 🔥 30 PERCENKÉNTI ÁRFOLYAM FRISSÍTÉS
     if ((minute === 0 || minute === 30) && lastTriggeredIntervalKey !== intervalKey) {
         lastTriggeredIntervalKey = intervalKey;
         
         try {
             const settings = await GuildSetting.findOne({});
             if (settings) {
-                if (!settings.btcHistory) settings.btcHistory = [BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE, BASE_BTC_PRICE];
+                if (!settings.btcHistory || settings.btcHistory.length === 0) {
+                    settings.btcHistory = Array(10).fill(BASE_BTC_PRICE);
+                }
                 
                 let eventText = '';
                 let changePercent = 0;
@@ -537,7 +567,7 @@ setInterval(async () => {
 
                 settings.btcPriceFt = newPrice;
                 settings.btcHistory.push(newPrice);
-                if (settings.btcHistory.length > 8) settings.btcHistory.shift();
+                if (settings.btcHistory.length > 10) settings.btcHistory.shift(); // Szigorúan max 10 elem
                 await settings.save();
 
                 const minerCh = client.channels.cache.get(CONFIG.MINER_CHANNEL);
