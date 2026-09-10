@@ -560,7 +560,7 @@ setInterval(async () => {
                         { text: '🟢 **NEWS FLASH:** Egy vezető ETF alap jóváhagyásra került! (+20%)', mult: 0.20 },
                         { text: '🟢 **NEWS FLASH:** A világ legnagyobb kereskedelmi hálózata elfogadja a BTC-t! (+15%)', mult: 0.15 },
                         { text: '🟢 **NEWS FLASH:** Elindult a globális bányászati halving esemény! (+12%)', mult: 0.12 },
-                        { text: '🔴 **NEWS FLASH:** Rövid távú szerverleállás történt az ázsiai bányászközpontokban! (-12%)', mult: -0.12 },
+                        { text: '🔴 **NEWS FLASH:** Rövid távú szerverleállás történt az ázsiai bányáksz-központokban! (-12%)', mult: -0.12 },
                         { text: '🔴 **NEWS FLASH:** Makrogazdasági kamatváltozások óvatosságra intenek! (-10%)', mult: -0.10 }
                     ];
                     const chosen = newsEvents[Math.floor(Math.random() * newsEvents.length)];
@@ -918,7 +918,7 @@ client.on('interactionCreate', async (i) => {
 
     // 🔒 Karbantartási / Leállítási mód blokkolás (A tulajdonosnak szabad utat enged)
     if (isMaintenanceMode && !isOwner) {
-        return i.reply({ content: '🛑 **A bot jelenleg le van állítva!** A parancsok ideiglenesen fel vannak függesztve.', ephemeral: true });
+        return i.reply({ content: '🛑 **A bot jelenleg le van állítva!** A parancsok ideiglenesen fel vannak függesztve.', ephemeral: true }).catch(() => {});
     }
 
     if (i.isChatInputCommand()) {
@@ -940,6 +940,9 @@ client.on('interactionCreate', async (i) => {
             const sub = i.options.getSubcommand();
 
             if (sub === 'ar') {
+                // ⚡ Gyors válasz előre, hogy a Discord ne dobjon "Az alkalmazás nem válaszolt" hibát
+                await i.deferReply();
+
                 const diffPercent = (((settings.btcPriceFt - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
                 const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
                 
@@ -954,7 +957,7 @@ client.on('interactionCreate', async (i) => {
                     )
                     .setImage(chartUrl);
 
-                return i.reply({ embeds: [embed] });
+                return i.editReply({ embeds: [embed] });
             }
 
             if (sub === 'sell') {
