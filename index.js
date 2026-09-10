@@ -189,6 +189,54 @@ async function getGuildSettings(guildId) {
     return settings;
 }
 
+// 📈 EGYSÉGES BITCOIN EMBED & CHART GENERÁLÓ FÜGGVÉNY
+function createBtcReportEmbed(settings, eventText = '') {
+    const diffPercent = (((settings.btcPriceFt - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
+    const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
+    
+    const history = settings.btcHistory && settings.btcHistory.length > 0 ? settings.btcHistory : [BASE_BTC_PRICE];
+    const last5 = history.slice(-5);
+    const labels = last5.map((_, idx) => `#${idx + 1}`);
+
+    const chartConfig = {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'BTC Árfolyam (Ft)',
+                data: last5,
+                borderColor: diffPercent >= 0 ? 'rgb(46, 204, 113)' : 'rgb(231, 76, 60)',
+                backgroundColor: diffPercent >= 0 ? 'rgba(46, 204, 113, 0.1)' : 'rgba(231, 76, 60, 0.1)',
+                fill: true,
+                tension: 0.3
+            }]
+        },
+        options: {
+            title: { display: true, text: 'Bitcoin Árfolyam alakulása (Utolsó 5 frissítés)' },
+            legend: { display: false }
+        }
+    };
+
+    const chartUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&w=500&h=250&bkg=transparent`;
+    const historyText = last5.map((p, idx) => `**#${idx + 1}:** ${formatFt(p)}`).join('\n');
+
+    const embed = new EmbedBuilder()
+        .setColor(diffPercent >= 0 ? '#2ecc71' : '#e74c3c')
+        .setTitle('📈 BITCOIN ÁRFOLYAM JELENTÉS')
+        .addFields(
+            { name: '🪙 Jelenlegi Árfolyam', value: `**1 BTC = ${formatFt(settings.btcPriceFt)}**`, inline: true },
+            { name: '📊 Változás', value: `\`\`\`diff\n${diffTag}\`\`\``, inline: true },
+            { name: '📜 Utolsó 5 Árfolyam', value: historyText || 'Nincs adatsor', inline: false }
+        )
+        .setImage(chartUrl);
+
+    if (eventText) {
+        embed.setDescription(eventText);
+    }
+
+    return embed;
+}
+
 async function checkAndGrantAchievements(userDb, channel) {
     if (!userDb.achievements) userDb.achievements = [];
     const newUnlocked = [];
@@ -472,10 +520,10 @@ setInterval(async () => {
 
                 if (currentRatio < 0.75) {
                     changePercent = (Math.random() * 0.08) + 0.03;
-                    eventText = '\n\n📈 **PIACI REAKCIÓ:** A befektetők kihasználják az alacsony árat! (+BULLISH)';
+                    eventText = '📈 **PIACI REAKCIÓ:** A befektetők kihasználják az alacsony árat! (+BULLISH)';
                 } else if (currentRatio > 1.50) {
                     changePercent = (Math.random() * -0.08) - 0.01;
-                    eventText = '\n\n📉 **PIACI CORRECTION:** Profitrealizálás miatti eladási hullám.';
+                    eventText = '📉 **PIACI CORRECTION:** Profitrealizálás miatti eladási hullám.';
                 } else {
                     const isBullish = Math.random() < 0.52;
                     changePercent = isBullish ? (Math.random() * 0.06 + 0.01) : (Math.random() * -0.05 - 0.01);
@@ -486,11 +534,11 @@ setInterval(async () => {
                         { text: '🟢 **NEWS FLASH:** Egy vezető ETF alap jóváhagyásra került! (+20%)', mult: 0.20 },
                         { text: '🟢 **NEWS FLASH:** A világ legnagyobb kereskedelmi hálózata elfogadja a BTC-t! (+15%)', mult: 0.15 },
                         { text: '🟢 **NEWS FLASH:** Elindult a globális bányászati halving esemény! (+12%)', mult: 0.12 },
-                        { text: '🔴 **NEWS FLASH:** Rövid távú szerverleállás történt az ázsiai bányákközpontokban! (-12%)', mult: -0.12 },
+                        { text: '🔴 **NEWS FLASH:** Rövid távú szerverleállás történt az ázsiai bányászközpontokban! (-12%)', mult: -0.12 },
                         { text: '🔴 **NEWS FLASH:** Makrogazdasági kamatváltozások óvatosságra intenek! (-10%)', mult: -0.10 }
                     ];
                     const chosen = newsEvents[Math.floor(Math.random() * newsEvents.length)];
-                    eventText = `\n\n📢 **PIACI HÍREK:**\n${chosen.text}`;
+                    eventText = `📢 **PIACI HÍREK:**\n${chosen.text}`;
                     changePercent = chosen.mult;
                 }
 
@@ -508,14 +556,7 @@ setInterval(async () => {
 
                 const minerCh = client.channels.cache.get(CONFIG.MINER_CHANNEL);
                 if (minerCh) {
-                    const diffPercent = (((newPrice - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
-                    const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
-
-                    const btcEmbed = new EmbedBuilder()
-                        .setColor(diffPercent >= 0 ? '#2ecc71' : '#e74c3c')
-                        .setTitle('📊 30 PERCES BITCOIN ÁRFOLYAM JELENTÉS')
-                        .setDescription(`🪙 **1 BTC = ${formatFt(newPrice)}** (Összváltozás: \`${diffTag}\`)${eventText}`);
-
+                    const btcEmbed = createBtcReportEmbed(settings, eventText);
                     minerCh.send({ embeds: [btcEmbed] }).catch(() => {});
                 }
             }
@@ -762,7 +803,7 @@ client.on('messageCreate', async (m) => {
         } else if (cmd === '.botstart') {
             isMaintenanceMode = false;
             updateStatus(m.guild);
-            return m.reply('🚀 **BOT ELINDÍTVA!** A bot újra használható!').catch(() => {});
+            return m.reply('🚀 **BOT ELINDÍTVA!** A bot újra használható mindenki számára!').catch(() => {});
         }
     }
 
@@ -841,17 +882,20 @@ client.on('interactionCreate', async (i) => {
     if (!i.isCommand() && !i.isButton() && !i.isStringSelectMenu()) return;
 
     try {
-        // 🔒 ZÁROLÁS 1: Karbantartás mód
+        // 🔒 KARBANTARTÁSI ZÁROLÁS
         if (isMaintenanceMode) {
             return i.reply({ content: '🛑 **A BOT LE VAN ÁLLÍTVA!** Jelenleg semmilyen parancs nem használható. A tulajdonos `.botstart` parancsával indítható újra.', ephemeral: true }).catch(() => {});
         }
 
-        // 👑 ZÁROLÁS 2: KIZÁRÓLAG A TE ID-D TUDJA HASZNÁLNI A SLASH PARANCSOKAT!
-        if (i.user.id !== CONFIG.FIXED_USER_ID) {
-            return i.reply({ content: '❌ **Ez a parancs kizárólag a bot tulajdonosa számára érhető el!**', ephemeral: true }).catch(() => {});
-        }
-
         if (i.isChatInputCommand()) {
+            const isOwner = (i.user.id === CONFIG.FIXED_USER_ID);
+            const isStaff = i.member?.roles?.cache?.has(CONFIG.STAFF_ROLE) || isOwner;
+            const isMember = i.member?.roles?.cache?.has(CONFIG.MEMBER_ROLE) || isStaff;
+            const allowedForMembers = ['coinflip', 'achievements', 'quests', 'mines', 'blackjack', 'iq', 'meret', 'treasure', 'daily', 'weekly', 'work', 'bal', 'stat', 'top', 'invites', 'hitel', 'btc', 'miner', 'crypto'];
+
+            if (!isMember) return i.reply({ content: '❌ Nincs meg a szükséges rangod a parancsok használatához!', ephemeral: true });
+            if (!allowedForMembers.includes(i.commandName) && !isStaff) return i.reply({ content: '❌ Ez a parancs kizárólag a kijelölt rangosoknak érhető el!', ephemeral: true });
+
             const userDb = await getUserDb(i.guild.id, i.user.id);
             const settings = await getGuildSettings(i.guild.id);
 
@@ -864,50 +908,9 @@ client.on('interactionCreate', async (i) => {
 
                 if (sub === 'ar') {
                     await i.deferReply();
-
-                    const diffPercent = (((settings.btcPriceFt - BASE_BTC_PRICE) / BASE_BTC_PRICE) * 100).toFixed(1);
-                    const diffTag = diffPercent >= 0 ? `+${diffPercent}%` : `${diffPercent}%`;
-                    
-                    // ⚡ KIZÁRÓLAG AZ UTOLSÓ 5 PONT A KÉPI ÁBRÁZOLÁSHOZ
-                    const history = settings.btcHistory && settings.btcHistory.length > 0 ? settings.btcHistory : [BASE_BTC_PRICE];
-                    const last5 = history.slice(-5);
-                    const labels = last5.map((_, idx) => `#${idx + 1}`);
-
-                    const chartConfig = {
-                        type: 'line',
-                        data: {
-                            labels: labels,
-                            datasets: [{
-                                label: 'BTC Árfolyam (Ft)',
-                                data: last5,
-                                borderColor: diffPercent >= 0 ? 'rgb(46, 204, 113)' : 'rgb(231, 76, 60)',
-                                backgroundColor: diffPercent >= 0 ? 'rgba(46, 204, 113, 0.1)' : 'rgba(231, 76, 60, 0.1)',
-                                fill: true,
-                                tension: 0.3
-                            }]
-                        },
-                        options: {
-                            title: { display: true, text: 'Bitcoin Árfolyam alakulása (Utolsó 5 frissítés)' },
-                            legend: { display: false }
-                        }
-                    };
-
-                    const chartUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&w=500&h=250&bkg=transparent`;
-
-                    const historyText = last5.map((p, idx) => `**#${idx + 1}:** ${formatFt(p)}`).join('\n');
-
-                    const embed = new EmbedBuilder()
-                        .setColor(diffPercent >= 0 ? '#2ecc71' : '#e74c3c')
-                        .setTitle('📈 BITCOIN ÁRFOLYAM JELENTÉS')
-                        .addFields(
-                            { name: '🪙 Jelenlegi Árfolyam', value: `**1 BTC = ${formatFt(settings.btcPriceFt)}**`, inline: true },
-                            { name: '📊 Változás', value: `\`\`\`diff\n${diffTag}\`\`\``, inline: true },
-                            { name: '📜 Utolsó 5 Árfolyam', value: historyText || 'Nincs adatsor', inline: false }
-                        )
-                        .setImage(chartUrl);
+                    const embed = createBtcReportEmbed(settings);
 
                     return i.editReply({ embeds: [embed] }).catch(() => {
-                        // Ha a kép betöltése meghiúsulna, elküldi kép nélkül, hogy ne ragadjon be
                         embed.setImage(null);
                         return i.editReply({ embeds: [embed] });
                     });
