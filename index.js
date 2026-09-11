@@ -675,9 +675,10 @@ const commands = [
     new SlashCommandBuilder().setName('achievements').setDescription('Mérföldkövek és elért kitüntetések lekérése').addUserOption(o => o.setName('user').setDescription('Kinek a mérföldkövei?')),
     new SlashCommandBuilder().setName('quests').setDescription('Napi küldetések és jutalmak átvétele'),
 
+    // 🪙 /BTC SELL - EGYSZERŰSÍTVE (EGÉSZ ELADÁSA MEGKERÜLÉS NÉLKÜL)
     new SlashCommandBuilder().setName('btc').setDescription('Bitcoin parancsok')
         .addSubcommand(s => s.setName('ar').setDescription('Bitcoin ára és grafikona'))
-        .addSubcommand(s => s.setName('sell').setDescription('BTC eladása').addNumberOption(o => o.setName('btc').setDescription('Eladandó BTC').setRequired(true))),
+        .addSubcommand(s => s.setName('sell').setDescription('Az összes Bitcoinod eladása készpénzért')),
 
     new SlashCommandBuilder().setName('miner').setDescription('Bányász bolt').addSubcommand(s => s.setName('bolt').setDescription('Bolt megnyitása')),
     new SlashCommandBuilder().setName('crypto').setDescription('Bányász farm kezelése')
@@ -939,18 +940,19 @@ client.on('interactionCreate', async (i) => {
                     });
                 }
 
+                // 🪙 TELJES BITCOIN KÉSZLET ELADÁSA MEGKERÜLÉS NÉLKÜL
                 if (sub === 'sell') {
-                    const amount = i.options.getNumber('btc');
-                    if ((userDb.btcBalance || 0) < amount) {
-                        return i.reply({ content: '❌ Nincs ennyi Bitcoinod!', ephemeral: true });
+                    const currentBtc = userDb.btcBalance || 0;
+                    if (currentBtc <= 0) {
+                        return i.reply({ content: '❌ Egyetlen Bitcoinod sincs, amit el tudnál adni!', ephemeral: true });
                     }
 
-                    const earnFt = Math.floor(amount * settings.btcPriceFt);
-                    userDb.btcBalance -= amount;
+                    const earnFt = Math.floor(currentBtc * settings.btcPriceFt);
+                    userDb.btcBalance = 0;
                     userDb.balance += earnFt;
                     await userDb.save();
 
-                    return i.reply({ content: `💰 Sikeresen eladtál **${formatBtc(amount)}** Bitcoin-t **${formatFt(earnFt)}** készpénzért! (Árfolyam: ${formatFt(settings.btcPriceFt)} / BTC)`, ephemeral: true });
+                    return i.reply({ content: `💰 Sikeresen eladtad az összes (**${formatBtc(currentBtc)}**) Bitcoinodat **${formatFt(earnFt)}** készpénzért! (Árfolyam: ${formatFt(settings.btcPriceFt)} / BTC)`, ephemeral: true });
                 }
             }
 
