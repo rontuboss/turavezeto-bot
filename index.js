@@ -519,7 +519,7 @@ setInterval(async () => {
                 const currentRatio = settings.btcPriceFt / BASE_BTC_PRICE;
 
                 // 🚀 NAGYOBB ÁRFOLYAM UGRÁSOK (15% - 30%)
-                const baseVariation = (Math.random() * 0.15) + 0.15; // 0.15 - 0.30 közötti érték
+                const baseVariation = (Math.random() * 0.15) + 0.15;
 
                 if (currentRatio < 0.60) {
                     changePercent = baseVariation;
@@ -564,33 +564,47 @@ setInterval(async () => {
                 }
             }
 
-            const users = await User.find({ "rigs.0": { $exists: true }, isBroken: false });
+            // ⚡ AUTOMATIKUS MEGJAVULÁS ÉS LEÁLLÁS KEZELÉSE AUTOMATA TIMERNÉL
+            const now = Date.now();
+            const users = await User.find({ "rigs.0": { $exists: true } });
+
             for (const u of users) {
-                const room = ROOMS[u.roomType || 'alagsor'];
-                const cooler = COOLERS[u.coolerType || 'stock'];
-                const finalFailChance = Math.max(0.005, room.failChance - cooler.failReduce);
-
-                if (Math.random() < finalFailChance) {
-                    const now = Date.now();
-                    const hoursPassed = Math.max(0, (now - (u.lastBtcClaim || now)) / (1000 * 60 * 60));
-                    
-                    let rawBtc = u.rigs ? u.rigs.reduce((sum, r) => sum + (r.btcPerHour || 0), 0) : 0;
-                    let btcPerHourTotal = rawBtc * room.multiplier;
-                    const accruedBtc = hoursPassed * btcPerHourTotal;
-
-                    u.isBroken = true;
-                    u.brokenAt = now;
-                    u.lastBtcClaim = now;
-
-                    if (accruedBtc > 0) {
-                        u.btcBalance = (u.btcBalance || 0) + accruedBtc;
-                        u.totalMinedBtc = (u.totalMinedBtc || 0) + accruedBtc;
-                    }
-
+                // Ha szerviz alatt volt és az idő lejárt, automatikusan újraindul
+                if (u.isBroken && u.repairUntil > 0 && u.repairUntil <= now) {
+                    u.isBroken = false;
+                    u.repairUntil = 0;
+                    u.brokenAt = 0;
+                    u.lastBtcClaim = now; // Újraindul a termelési számláló
                     await u.save();
-                    
-                    const ch = client.channels.cache.get(CONFIG.MINER_CHANNEL);
-                    if (ch) ch.send(`⚡ 🚨 **TÚLMELEGEDÉS!** <@${u.userId}> szerverterme leállt! Az eddigi termelésed (**${formatBtc(accruedBtc)}**) elmentésre került. Használd a \`/crypto szerviz\` parancsot!`).catch(() => {});
+                }
+
+                // Kizárólag az aktív szervereknél vizsgálunk meghibásodást
+                if (!u.isBroken) {
+                    const room = ROOMS[u.roomType || 'alagsor'];
+                    const cooler = COOLERS[u.coolerType || 'stock'];
+                    const finalFailChance = Math.max(0.005, room.failChance - cooler.failReduce);
+
+                    if (Math.random() < finalFailChance) {
+                        const hoursPassed = Math.max(0, (now - (u.lastBtcClaim || now)) / (1000 * 60 * 60));
+                        
+                        let rawBtc = u.rigs ? u.rigs.reduce((sum, r) => sum + (r.btcPerHour || 0), 0) : 0;
+                        let btcPerHourTotal = rawBtc * room.multiplier;
+                        const accruedBtc = hoursPassed * btcPerHourTotal;
+
+                        u.isBroken = true;
+                        u.brokenAt = now;
+                        u.lastBtcClaim = now;
+
+                        if (accruedBtc > 0) {
+                            u.btcBalance = (u.btcBalance || 0) + accruedBtc;
+                            u.totalMinedBtc = (u.totalMinedBtc || 0) + accruedBtc;
+                        }
+
+                        await u.save();
+                        
+                        const ch = client.channels.cache.get(CONFIG.MINER_CHANNEL);
+                        if (ch) ch.send(`⚡ 🚨 **TÚLMELEGEDÉS!** <@${u.userId}> szerverterme leállt! Az eddigi termelésed (**${formatBtc(accruedBtc)}**) elmentésre került. Használd a \`/crypto szerviz\` parancsot!`).catch(() => {});
+                    }
                 }
             }
         } catch (e) { console.error(e); }
@@ -976,6 +990,7 @@ client.on('interactionCreate', async (i) => {
                     const gpuCount = targetDb.rigs ? targetDb.rigs.length : 0;
                     const now = Date.now();
                     
+                    // ⚙️ MEGJAVULT SZERKEZET AUTOMATIKUS MŰKÖDÉSE
                     if (targetDb.isBroken && targetDb.repairUntil > 0 && targetDb.repairUntil <= now) {
                         targetDb.isBroken = false;
                         targetDb.repairUntil = 0;
@@ -1099,7 +1114,7 @@ client.on('interactionCreate', async (i) => {
                     userDb.repairUntil = Date.now() + (30 * 60 * 1000);
                     await userDb.save();
 
-                    return i.reply({ content: '🔧 **Szerviz elindítva!** A szerverterem **30 perc múlva** újra működni fog!', ephemeral: true });
+                    return i.reply({ content: '🔧 **Szerviz elindítva!** A szerverterem **30 perc múlva** újra automatikusan működni fog!', ephemeral: true });
                 }
             }
 
@@ -2120,7 +2135,7 @@ client.on('interactionCreate', async (i) => {
                 return i.update({ embeds: [new EmbedBuilder().setColor('#f7931a').setTitle(`🖥️ ${rarity.toUpperCase()} KÁRTYÁK`).setDescription('Válaszd ki a megvásárolni kívánt modellt!')], components: [row1, row2] });
             }
 
-            // ⚡ GYORSABB KÁRTYAVÁSÁRLÁS KEZELÉS (NEM ZÁRJA BE A MENÜT)
+            // ⚡ GYORS KÁRTYAVÁSÁRLÁS ÉS AZONNALI TERMELÉSINDÍTÁS KEZELÉSE
             if (i.customId.startsWith('select_buy_gpu')) {
                 const gpuId = i.values[0];
                 const gpu = GPUS[gpuId];
@@ -2135,16 +2150,24 @@ client.on('interactionCreate', async (i) => {
                     return i.reply({ content: `❌ Nincs elég pénzed erre a kártyára! (Ára: ${formatFt(gpu.price)})`, ephemeral: true });
                 }
 
+                const now = Date.now();
                 userDb.balance -= gpu.price;
                 if (!userDb.rigs) userDb.rigs = [];
                 userDb.rigs.push({ gpuId: gpu.id, name: gpu.name, btcPerHour: gpu.btcPerHour });
+
+                // 🚀 BÁNYÁSZAT AZONNALI INDÍTÁSA A VÁSÁRLÁSKOR
+                userDb.lastBtcClaim = now;
+                userDb.isBroken = false; 
+                userDb.repairUntil = 0;
+                userDb.brokenAt = 0;
+
                 await userDb.save();
 
                 const updatedGpuCount = userDb.rigs.length;
                 const embed = new EmbedBuilder()
                     .setColor('#2ecc71')
                     .setTitle('🎉 SIKERES VIDEOKÁRTYA VÁSÁRLÁS!')
-                    .setDescription(`Sikeresen megvásároltad a következőt: **${gpu.name}**!\n\n💳 **Új Készpénz Egyenleg:** ${formatFt(userDb.balance)}\n📦 **Szerverterem Kapacitás:** ${updatedGpuCount}/${roomInfo.maxGpus} kártya`)
+                    .setDescription(`Sikeresen megvásároltad a következőt: **${gpu.name}**!\n\n⚡ **A BÁNYÁSZAT AZONNAL ELINDULT!**\n💳 **Új Készpénz Egyenleg:** ${formatFt(userDb.balance)}\n📦 **Szerverterem Kapacitás:** ${updatedGpuCount}/${roomInfo.maxGpus} kártya`)
                     .setFooter({ text: 'Válassz újabb kártyát, vagy lépj vissza a főmenübe!' });
 
                 const row = new ActionRowBuilder().addComponents(
