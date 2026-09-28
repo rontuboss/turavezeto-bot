@@ -15,6 +15,7 @@ const CONFIG = {
     PARTNER_PARENTS: ['1534568268956827758'],
     REMINDER_CHANNEL: '1546794386581356584',
     MINER_CHANNEL: '1547004288188948581',
+    WORLDBOSS_CHANNEL: '1553345077407916032', // 🐉 WorldBoss Csatorna
     REMINDER_ROLE: '1546794488372924476',
     BOOSTER_ROLE: '1449473778386997311',
     STAFF_ROLE: '1436671411178569832',
@@ -218,7 +219,7 @@ function createBtcReportEmbed(settings, eventText = '') {
     };
 
     const chartUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&w=500&h=250&bkg=transparent`;
-    const historyText = last5.map((p, idx) => `**#${idx + 1}:** ${formatFt(p)}`).join('\n');
+    const historyText = last5.map((p, idx) => `**#${idx + 1}:**${formatFt(p)}`).join('\n');
 
     const embed = new EmbedBuilder()
         .setColor(diffPercent >= 0 ? '#2ecc71' : '#e74c3c')
@@ -417,7 +418,7 @@ function createMinesEmbed(bet, bombs, revealedCount, currentMult, currentWin, ti
             { name: '💵 TÉT', value: `\`\`\`${formatFt(bet)}\`\`\``, inline: true },
             { name: '📈 SZORZÓ', value: `\`\`\`x${currentMult.toFixed(2)}\`\`\``, inline: true },
             { name: '💰 VÁRHATÓ NYEREMÉNY', value: `\`\`\`${formatFt(currentWin)}\`\`\``, inline: true },
-            { name: '📊 JÁTÉK ÁLLÁSA', value: `💎 Megtalált gyémántok: **${revealedCount} / ${25 - bombs}**\n💣 Bombák a pályán: **${bombs} db**\n\n*💡 Tipp: Reagálj a ✅ emojira a kifizetéshez!*`, inline: false }
+            { name: '📊 JÁTÉK ÁLLÁSA', value: `💎 Megtalált gyémántok: **${revealedCount} /${25 - bombs}**\n💣 Bombák a pályán: **${bombs} db**\n\n*💡 Tipp: Reagálj a ✅ emojira a kifizetéshez!*`, inline: false }
         );
 }
 
@@ -611,6 +612,7 @@ setInterval(async () => {
     }
 }, 10000);
 
+// 🛒 VÁNDORKERESKEDŐ RIASZTÁS
 let lastTriggeredMinute = '';
 setInterval(async () => {
     const timeStr = new Date().toLocaleTimeString('hu-HU', { timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -623,6 +625,22 @@ setInterval(async () => {
             const count = Math.floor(Math.random() * 4) + 5;
             for (let i = 0; i < count; i++) {
                 await channel.send({ content: `${alertEmoji} 🚨 **RIASZTÁS! MEGY A VÁNDORKERESKEDŐ! (${eventTime})** 🚨 ${alertEmoji}\n<@&${CONFIG.REMINDER_ROLE}>` }).catch(() => {});
+                await new Promise(r => setTimeout(r, 1500));
+            }
+        }
+    }
+}, 10000);
+
+// 🐉 WORLDBOSS RIASZTÁS BALKERCRAFTON (16:25 és 20:25)
+let lastWorldBossTriggered = '';
+setInterval(async () => {
+    const timeStr = new Date().toLocaleTimeString('hu-HU', { timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false });
+    if (['16:25', '20:25'].includes(timeStr) && lastWorldBossTriggered !== timeStr) {
+        lastWorldBossTriggered = timeStr;
+        const channel = client.channels.cache.get(CONFIG.WORLDBOSS_CHANNEL);
+        if (channel) {
+            for (let i = 0; i < 3; i++) {
+                await channel.send({ content: `⚔️ 🐉 **WORLDBOSS LESZ BALKERCRAFTON!** ⚔️\n@everyone` }).catch(() => {});
                 await new Promise(r => setTimeout(r, 1500));
             }
         }
@@ -1020,7 +1038,7 @@ client.on('interactionCreate', async (i) => {
                             const remMs = targetDb.repairUntil - now;
                             const remMin = Math.floor(remMs / (1000 * 60));
                             const remSec = Math.floor((remMs % (1000 * 60)) / 1000);
-                            statusText = `🔴 **TÚLMELEGEDETT / MEGHIBÁSODOTT!**\n🛠️ **Szerelés alatt (Hátralévő idő: ${remMin} perc ${remSec} mp)**`;
+                            statusText = `🔴 **TÚLMELEGEDETT / MEGHIBÁSODOTT!**\n🛠️ **Szerelés alatt (Hátralévő idő: ${remMin} perc${remSec} mp)**`;
                         } else {
                             statusText = '🔴 **TÚLMELEGEDETT / MEGHIBÁSODOTT!**\n⚠️ *A farm leállt, a termelés szünetel!*';
                         }
@@ -1404,7 +1422,7 @@ client.on('interactionCreate', async (i) => {
             if (i.commandName === 'bal') {
                 const target = i.options.getUser('user') || i.user;
                 const targetDb = await getUserDb(i.guild.id, target.id);
-                return i.reply({ content: `💳 **${target.username}** egyenlege:\n• Cash: **${formatFt(targetDb.balance)}** ${targetDb.loanDebt > 0 ? `(Hitel tartozás: ${formatFt(targetDb.loanDebt)})` : ''}\n• Bitcoin: **${formatBtcWithFt(targetDb.btcBalance || 0, settings.btcPriceFt)}**` });
+                return i.reply({ content: `💳 **${target.username}** egyenlege:\n• Cash: **${formatFt(targetDb.balance)}**${targetDb.loanDebt > 0 ? `(Hitel tartozás: ${formatFt(targetDb.loanDebt)})` : ''}\n• Bitcoin: **${formatBtcWithFt(targetDb.btcBalance || 0, settings.btcPriceFt)}**` });
             }
 
             if (i.commandName === 'stat') {
@@ -1646,7 +1664,7 @@ client.on('interactionCreate', async (i) => {
                 } else if (i.commandName === 'roast') {
                     const target = i.options.getUser('user');
                     const roasts = ["Mikor Isten az észt osztotta, te valószínűleg a sor végén álltál egy törött csészével. ☕", "Olyan vagy, mint a felhős idő: ha eltűnsz, mindenkinek szebb lesz a napja. ☀️", "Ha az ostobaság fájna, egész nap üvöltenél. 🔊"];
-                    return i.reply({ content: `🔥 **<@${target.id}>**: ${roasts[Math.floor(Math.random() * roasts.length)]}` });
+                    return i.reply({ content: `🔥 **<@${target.id}>**:${roasts[Math.floor(Math.random() * roasts.length)]}` });
                 } else if (i.commandName === 'rate') {
                     const rating = Math.floor(Math.random() * 10) + 1;
                     return i.reply({ content: `⭐ Értékelés: **"${i.options.getString('thing')}"**\n📊 Eredmény: **${rating}/10**` });
