@@ -15,7 +15,9 @@ const CONFIG = {
     PARTNER_PARENTS: ['1534568268956827758'],
     REMINDER_CHANNEL: '1546794386581356584',
     MINER_CHANNEL: '1547004288188948581',
-    WORLDBOSS_CHANNEL: '1553345077407916032', // 🐉 WorldBoss Csatorna
+    WORLDBOSS_CHANNEL: '1553345077407916032', // 🐉 WorldBoss & Feketepiac Csatorna
+    WORLDBOSS_ROLE: '1533538488786616391',     // ⚔️ WorldBoss Rang
+    FEKETEPIAC_ROLE: '1554614149647175730',    // 🕵️ Feketepiac Rang
     REMINDER_ROLE: '1546794488372924476',
     BOOSTER_ROLE: '1449473778386997311',
     STAFF_ROLE: '1436671411178569832',
@@ -640,7 +642,23 @@ setInterval(async () => {
         const channel = client.channels.cache.get(CONFIG.WORLDBOSS_CHANNEL);
         if (channel) {
             for (let i = 0; i < 3; i++) {
-                await channel.send({ content: `⚔️ 🐉 **WORLDBOSS LESZ BALKERCRAFTON!** ⚔️\n@everyone` }).catch(() => {});
+                await channel.send({ content: `⚔️ 🐉 **WORLDBOSS LESZ BALKERCRAFTON!** ⚔️\n<@&${CONFIG.WORLDBOSS_ROLE}>` }).catch(() => {});
+                await new Promise(r => setTimeout(r, 1500));
+            }
+        }
+    }
+}, 10000);
+
+// 🕵️ FEKETEPIAC RIASZTÁS BALKERCRAFTON (23:45)
+let lastFeketepiacTriggered = '';
+setInterval(async () => {
+    const timeStr = new Date().toLocaleTimeString('hu-HU', { timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false });
+    if (timeStr === '23:45' && lastFeketepiacTriggered !== timeStr) {
+        lastFeketepiacTriggered = timeStr;
+        const channel = client.channels.cache.get(CONFIG.WORLDBOSS_CHANNEL);
+        if (channel) {
+            for (let i = 0; i < 3; i++) {
+                await channel.send({ content: `🕵️ 🖤 **FEKETEPIAC KEZDŐDIK BALKERCRAFTON!** 🖤\n<@&${CONFIG.FEKETEPIAC_ROLE}>` }).catch(() => {});
                 await new Promise(r => setTimeout(r, 1500));
             }
         }
@@ -1815,7 +1833,7 @@ client.on('interactionCreate', async (i) => {
                     new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
                 );
 
-                return i.update({ embeds: [new EmbedBuilder().setColor('#f7931a').setTitle('🖥️ VIDEOKÁRTYA KATEGÓRIÁK').setDescription('Válassz ki egy kategóriát a gördülőmenüből!')], components: [row1, row2] });
+                return i.update({ embeds: [new EmbedBuilder().setColor('#f7931a').setTitle('🖥️️ VIDEOKÁRTYA KATEGÓRIÁK').setDescription('Válassz ki egy kategóriát a gördülőmenüből!')], components: [row1, row2] });
             }
 
             if (i.customId.startsWith('miner_menu_rooms')) {
@@ -2192,7 +2210,7 @@ client.on('interactionCreate', async (i) => {
 
                 const row = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId(`miner_menu_gpus_${i.user.id}`).setLabel('🛒 Újabb kártya vásárlása').setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
+                    new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
                 );
 
                 return i.update({ embeds: [embed], components: [row] });
