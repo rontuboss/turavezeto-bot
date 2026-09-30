@@ -649,11 +649,11 @@ setInterval(async () => {
     }
 }, 10000);
 
-// 🕵️ FEKETEPIAC RIASZTÁS BALKERCRAFTON (23:45)
+// 🕵️ FEKETEPIAC RIASZTÁS BALKERCRAFTON (23:55)
 let lastFeketepiacTriggered = '';
 setInterval(async () => {
     const timeStr = new Date().toLocaleTimeString('hu-HU', { timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false });
-    if (timeStr === '23:45' && lastFeketepiacTriggered !== timeStr) {
+    if (timeStr === '23:55' && lastFeketepiacTriggered !== timeStr) {
         lastFeketepiacTriggered = timeStr;
         const channel = client.channels.cache.get(CONFIG.WORLDBOSS_CHANNEL);
         if (channel) {
@@ -1833,7 +1833,7 @@ client.on('interactionCreate', async (i) => {
                     new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
                 );
 
-                return i.update({ embeds: [new EmbedBuilder().setColor('#f7931a').setTitle('🖥️️ VIDEOKÁRTYA KATEGÓRIÁK').setDescription('Válassz ki egy kategóriát a gördülőmenüből!')], components: [row1, row2] });
+                return i.update({ embeds: [new EmbedBuilder().setColor('#f7931a').setTitle('🖥 VIDEOKÁRTYA KATEGÓRIÁK').setDescription('Válassz ki egy kategóriát a gördülőmenüből!')], components: [row1, row2] });
             }
 
             if (i.customId.startsWith('miner_menu_rooms')) {
@@ -1858,7 +1858,7 @@ client.on('interactionCreate', async (i) => {
 
                 const row1 = new ActionRowBuilder().addComponents(select);
                 const row2 = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
+                    new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
                 );
 
                 return i.update({ embeds: [embed], components: [row1, row2] });
@@ -2210,7 +2210,7 @@ client.on('interactionCreate', async (i) => {
 
                 const row = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId(`miner_menu_gpus_${i.user.id}`).setLabel('🛒 Újabb kártya vásárlása').setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
+                    new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
                 );
 
                 return i.update({ embeds: [embed], components: [row] });
