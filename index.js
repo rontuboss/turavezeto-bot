@@ -15,9 +15,6 @@ const CONFIG = {
     PARTNER_PARENTS: ['1534568268956827758'],
     REMINDER_CHANNEL: '1546794386581356584',
     MINER_CHANNEL: '1547004288188948581',
-    WORLDBOSS_CHANNEL: '1553345077407916032', // 🐉 WorldBoss & Feketepiac Csatorna
-    WORLDBOSS_ROLE: '1533538488786616391',     // ⚔️ WorldBoss Rang
-    FEKETEPIAC_ROLE: '1554614149647175730',    // 🕵️ Feketepiac Rang
     REMINDER_ROLE: '1546794488372924476',
     BOOSTER_ROLE: '1449473778386997311',
     STAFF_ROLE: '1436671411178569832',
@@ -611,57 +608,6 @@ setInterval(async () => {
                 }
             }
         } catch (e) { console.error(e); }
-    }
-}, 10000);
-
-// 🛒 VÁNDORKERESKEDŐ RIASZTÁS
-let lastTriggeredMinute = '';
-setInterval(async () => {
-    const timeStr = new Date().toLocaleTimeString('hu-HU', { timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false });
-    if (['15:58', '15:59', '16:00', '19:58', '19:59', '20:00'].includes(timeStr) && lastTriggeredMinute !== timeStr) {
-        lastTriggeredMinute = timeStr;
-        const channel = client.channels.cache.get(CONFIG.REMINDER_CHANNEL);
-        if (channel) {
-            const alertEmoji = channel.guild?.emojis.cache.find(e => e.name.toLowerCase() === 'alert') || '🚨';
-            const eventTime = ['15:58', '15:59', '16:00'].includes(timeStr) ? '16:00' : '20:00';
-            const count = Math.floor(Math.random() * 4) + 5;
-            for (let i = 0; i < count; i++) {
-                await channel.send({ content: `${alertEmoji} 🚨 **RIASZTÁS! MEGY A VÁNDORKERESKEDŐ! (${eventTime})** 🚨 ${alertEmoji}\n<@&${CONFIG.REMINDER_ROLE}>` }).catch(() => {});
-                await new Promise(r => setTimeout(r, 1500));
-            }
-        }
-    }
-}, 10000);
-
-// 🐉 WORLDBOSS RIASZTÁS BALKERCRAFTON (16:25 és 20:25)
-let lastWorldBossTriggered = '';
-setInterval(async () => {
-    const timeStr = new Date().toLocaleTimeString('hu-HU', { timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false });
-    if (['16:25', '20:25'].includes(timeStr) && lastWorldBossTriggered !== timeStr) {
-        lastWorldBossTriggered = timeStr;
-        const channel = client.channels.cache.get(CONFIG.WORLDBOSS_CHANNEL);
-        if (channel) {
-            for (let i = 0; i < 3; i++) {
-                await channel.send({ content: `⚔️ 🐉 **WORLDBOSS LESZ BALKERCRAFTON!** ⚔️\n<@&${CONFIG.WORLDBOSS_ROLE}>` }).catch(() => {});
-                await new Promise(r => setTimeout(r, 1500));
-            }
-        }
-    }
-}, 10000);
-
-// 🕵️ FEKETEPIAC RIASZTÁS BALKERCRAFTON (23:55)
-let lastFeketepiacTriggered = '';
-setInterval(async () => {
-    const timeStr = new Date().toLocaleTimeString('hu-HU', { timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false });
-    if (timeStr === '23:55' && lastFeketepiacTriggered !== timeStr) {
-        lastFeketepiacTriggered = timeStr;
-        const channel = client.channels.cache.get(CONFIG.WORLDBOSS_CHANNEL);
-        if (channel) {
-            for (let i = 0; i < 3; i++) {
-                await channel.send({ content: `🕵️ 🖤 **FEKETEPIAC KEZDŐDIK BALKERCRAFTON!** 🖤\n<@&${CONFIG.FEKETEPIAC_ROLE}>` }).catch(() => {});
-                await new Promise(r => setTimeout(r, 1500));
-            }
-        }
     }
 }, 10000);
 
@@ -1858,7 +1804,7 @@ client.on('interactionCreate', async (i) => {
 
                 const row1 = new ActionRowBuilder().addComponents(select);
                 const row2 = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀️️ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
+                    new ButtonBuilder().setCustomId(`miner_back_main_${i.user.id}`).setLabel('◀ Vissza a főmenübe').setStyle(ButtonStyle.Secondary)
                 );
 
                 return i.update({ embeds: [embed], components: [row1, row2] });
