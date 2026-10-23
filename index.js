@@ -218,7 +218,7 @@ function createBtcReportEmbed(settings, eventText = '') {
     };
 
     const chartUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&w=500&h=250&bkg=transparent`;
-    const historyText = last5.map((p, idx) => `**#${idx + 1}:**${formatFt(p)}`).join('\n');
+    const historyText = last5.map((p, idx) => `**#${idx + 1}:** ${formatFt(p)}`).join('\n');
 
     const embed = new EmbedBuilder()
         .setColor(diffPercent >= 0 ? '#2ecc71' : '#e74c3c')
@@ -417,7 +417,7 @@ function createMinesEmbed(bet, bombs, revealedCount, currentMult, currentWin, ti
             { name: '💵 TÉT', value: `\`\`\`${formatFt(bet)}\`\`\``, inline: true },
             { name: '📈 SZORZÓ', value: `\`\`\`x${currentMult.toFixed(2)}\`\`\``, inline: true },
             { name: '💰 VÁRHATÓ NYEREMÉNY', value: `\`\`\`${formatFt(currentWin)}\`\`\``, inline: true },
-            { name: '📊 JÁTÉK ÁLLÁSA', value: `💎 Megtalált gyémántok: **${revealedCount} /${25 - bombs}**\n💣 Bombák a pályán: **${bombs} db**\n\n*💡 Tipp: Reagálj a ✅ emojira a kifizetéshez!*`, inline: false }
+            { name: '📊 JÁTÉK ÁLLÁSA', value: `💎 Megtalált gyémántok: **${revealedCount} / ${25 - bombs}**\n💣 Bombák a pályán: **${bombs} db**\n\n*💡 Tipp: Reagálj a ✅ emojira a kifizetéshez!*`, inline: false }
         );
 }
 
@@ -588,7 +588,7 @@ setInterval(async () => {
                         const hoursPassed = Math.max(0, (now - (u.lastBtcClaim || now)) / (1000 * 60 * 60));
                         
                         let rawBtc = u.rigs ? u.rigs.reduce((sum, r) => sum + (r.btcPerHour || 0), 0) : 0;
-                        let btcPerHourTotal = rawBtc * room.multiplier;
+                        let btcPerHourTotal = rawBtc * roomInfo.multiplier;
                         const accruedBtc = hoursPassed * btcPerHourTotal;
 
                         u.isBroken = true;
@@ -608,6 +608,27 @@ setInterval(async () => {
                 }
             }
         } catch (e) { console.error(e); }
+    }
+}, 10000);
+
+// 🛒 VÁNDORKERESKEDŐ RIASZTÁS (16:00 és 20:00) - FELHÍVÓ ÉS FIGYELEMFELKELTŐ SZÖVEGGEL!
+let lastTriggeredMinute = '';
+setInterval(async () => {
+    const timeStr = new Date().toLocaleTimeString('hu-HU', { timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false });
+    if (['15:58', '15:59', '16:00', '19:58', '19:59', '20:00'].includes(timeStr) && lastTriggeredMinute !== timeStr) {
+        lastTriggeredMinute = timeStr;
+        const channel = client.channels.cache.get(CONFIG.REMINDER_CHANNEL);
+        if (channel) {
+            const eventTime = ['15:58', '15:59', '16:00'].includes(timeStr) ? '16:00' : '20:00';
+            const count = Math.floor(Math.random() * 3) + 4; // 4-6 alkalommal pingel egymás után
+            
+            for (let i = 0; i < count; i++) {
+                await channel.send({ 
+                    content: `🔥 🛒 **AKCIÓ / RIASZTÁS! MEGERKEREZETT A VÁNDORKERESKEDŐ! (${eventTime})** 🛒 🔥\n> 💸 *Ne hagyd ki a ritka ajánlatokat és az exkluzív cuccokat!*\n<@&${CONFIG.REMINDER_ROLE}>` 
+                }).catch(() => {});
+                await new Promise(r => setTimeout(r, 1500));
+            }
+        }
     }
 }, 10000);
 
@@ -1002,7 +1023,7 @@ client.on('interactionCreate', async (i) => {
                             const remMs = targetDb.repairUntil - now;
                             const remMin = Math.floor(remMs / (1000 * 60));
                             const remSec = Math.floor((remMs % (1000 * 60)) / 1000);
-                            statusText = `🔴 **TÚLMELEGEDETT / MEGHIBÁSODOTT!**\n🛠️ **Szerelés alatt (Hátralévő idő: ${remMin} perc${remSec} mp)**`;
+                            statusText = `🔴 **TÚLMELEGEDETT / MEGHIBÁSODOTT!**\n🛠️ **Szerelés alatt (Hátralévő idő: ${remMin} perc ${remSec} mp)**`;
                         } else {
                             statusText = '🔴 **TÚLMELEGEDETT / MEGHIBÁSODOTT!**\n⚠️ *A farm leállt, a termelés szünetel!*';
                         }
@@ -1386,7 +1407,7 @@ client.on('interactionCreate', async (i) => {
             if (i.commandName === 'bal') {
                 const target = i.options.getUser('user') || i.user;
                 const targetDb = await getUserDb(i.guild.id, target.id);
-                return i.reply({ content: `💳 **${target.username}** egyenlege:\n• Cash: **${formatFt(targetDb.balance)}**${targetDb.loanDebt > 0 ? `(Hitel tartozás: ${formatFt(targetDb.loanDebt)})` : ''}\n• Bitcoin: **${formatBtcWithFt(targetDb.btcBalance || 0, settings.btcPriceFt)}**` });
+                return i.reply({ content: `💳 **${target.username}** egyenlege:\n• Cash: **${formatFt(targetDb.balance)}** ${targetDb.loanDebt > 0 ? `(Hitel tartozás: ${formatFt(targetDb.loanDebt)})` : ''}\n• Bitcoin: **${formatBtcWithFt(targetDb.btcBalance || 0, settings.btcPriceFt)}**` });
             }
 
             if (i.commandName === 'stat') {
@@ -1628,7 +1649,7 @@ client.on('interactionCreate', async (i) => {
                 } else if (i.commandName === 'roast') {
                     const target = i.options.getUser('user');
                     const roasts = ["Mikor Isten az észt osztotta, te valószínűleg a sor végén álltál egy törött csészével. ☕", "Olyan vagy, mint a felhős idő: ha eltűnsz, mindenkinek szebb lesz a napja. ☀️", "Ha az ostobaság fájna, egész nap üvöltenél. 🔊"];
-                    return i.reply({ content: `🔥 **<@${target.id}>**:${roasts[Math.floor(Math.random() * roasts.length)]}` });
+                    return i.reply({ content: `🔥 **<@${target.id}>**: ${roasts[Math.floor(Math.random() * roasts.length)]}` });
                 } else if (i.commandName === 'rate') {
                     const rating = Math.floor(Math.random() * 10) + 1;
                     return i.reply({ content: `⭐ Értékelés: **"${i.options.getString('thing')}"**\n📊 Eredmény: **${rating}/10**` });
