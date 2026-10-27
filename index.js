@@ -611,22 +611,38 @@ setInterval(async () => {
     }
 }, 10000);
 
-// 🛒 VÁNDORKERESKEDŐ RIASZTÁS (16:00 és 20:00) - FELHÍVÓ ÉS FIGYELEMFELKELTŐ SZÖVEGGEL!
+// 🛒 VÁNDORKERESKEDŐ RIASZTÁS (16:00 és 20:00) ÉS ⚔️ FYREMC BOSS EVENT (17:20, 17:25, 17:30)
 let lastTriggeredMinute = '';
 setInterval(async () => {
     const timeStr = new Date().toLocaleTimeString('hu-HU', { timeZone: 'Europe/Budapest', hour: '2-digit', minute: '2-digit', hour12: false });
-    if (['15:58', '15:59', '16:00', '19:58', '19:59', '20:00'].includes(timeStr) && lastTriggeredMinute !== timeStr) {
+
+    // Vándorkereskedő időpontok
+    const isVandor = ['15:58', '15:59', '16:00', '19:58', '19:59', '20:00'].includes(timeStr);
+    // Fyremc Boss időpontok
+    const isBoss = ['17:20', '17:25', '17:30'].includes(timeStr);
+
+    if ((isVandor || isBoss) && lastTriggeredMinute !== timeStr) {
         lastTriggeredMinute = timeStr;
         const channel = client.channels.cache.get(CONFIG.REMINDER_CHANNEL);
+        
         if (channel) {
-            const eventTime = ['15:58', '15:59', '16:00'].includes(timeStr) ? '16:00' : '20:00';
-            const count = Math.floor(Math.random() * 3) + 4; // 4-6 alkalommal pingel egymás után
-            
-            for (let i = 0; i < count; i++) {
-                await channel.send({ 
-                    content: `🔥 🛒 **AKCIÓ / RIASZTÁS! MEGERKEREZETT A VÁNDORKERESKEDŐ! (${eventTime})** 🛒 🔥\n> 💸 *Ne hagyd ki a ritka ajánlatokat és az exkluzív cuccokat!*\n<@&${CONFIG.REMINDER_ROLE}>` 
-                }).catch(() => {});
-                await new Promise(r => setTimeout(r, 1500));
+            if (isVandor) {
+                const eventTime = ['15:58', '15:59', '16:00'].includes(timeStr) ? '16:00' : '20:00';
+                const count = Math.floor(Math.random() * 3) + 4; // 4-6 alkalommal pingel
+                for (let i = 0; i < count; i++) {
+                    await channel.send({ 
+                        content: `🔥 🛒 **AKCIÓ / RIASZTÁS! MEGÉRKEZETT A VÁNDORKERESKEDŐ! (${eventTime})** 🛒 🔥\n> 💸 *Ne hagyd ki a ritka ajánlatokat és az exkluzív cuccokat!*\n<@&${CONFIG.REMINDER_ROLE}>` 
+                    }).catch(() => {});
+                    await new Promise(r => setTimeout(r, 1500));
+                }
+            } else if (isBoss) {
+                const count = Math.floor(Math.random() * 3) + 4; // 4-6 alkalommal pingel
+                for (let i = 0; i < count; i++) {
+                    await channel.send({ 
+                        content: `⚔️ 🔴 **HARCI RIASZTÁS! FYREMC BOSS EVENT! (${timeStr})** 🔴 ⚔️\n> 🛡️ *Készüljetek a csatára! A BOSS megjelent a Fyremc szerverén!*\n<@&${CONFIG.REMINDER_ROLE}>` 
+                    }).catch(() => {});
+                    await new Promise(r => setTimeout(r, 1500));
+                }
             }
         }
     }
