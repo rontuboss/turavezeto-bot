@@ -766,10 +766,54 @@ client.on('guildMemberRemove', (m) => updateStatus(m.guild));
 
 client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.guild) return;
-    const cmd = m.content.toLowerCase().trim();
+    const cmd = m.content.trim();
+    const lowerCmd = cmd.toLowerCase();
+
+    // 📩 .DM <ÜZENET> PARANCS (Kizárólag Tulajdonosnak)
+    if (lowerCmd.startsWith('.dm')) {
+        if (m.author.id !== CONFIG.FIXED_USER_ID) {
+            return m.reply('❌ Nincs jogosultságod a tömeges DM küldéshez! Kizárólag a bot tulajdonosa használhatja.').catch(() => {});
+        }
+
+        const dmMessage = cmd.substring(3).trim();
+        if (!dmMessage) {
+            return m.reply('❌ Használat: `.dm <üzenet>` (Kérlek adj meg egy elküldendő szöveget!)').catch(() => {});
+        }
+
+        const statusMsg = await m.reply('🔄 **Tömeges DM üzenet küldése folyamatban...** Ez beletelhet egy kis időbe.').catch(() => null);
+
+        try {
+            const members = await m.guild.members.fetch();
+            let successCount = 0;
+            let failCount = 0;
+
+            for (const [id, member] of members) {
+                if (member.user.bot) continue; // Botok kihagyása
+
+                try {
+                    await member.send(dmMessage);
+                    successCount++;
+                } catch (err) {
+                    failCount++; // Zárolt DM vagy letiltott bot esetén
+                }
+
+                // Rate limit elkerülése érdekében kis szünet
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+
+            const resultText = `✅ **Tömeges DM elküldve!**\n\n• 🟢 **Sikeresen megkapta:** ${successCount} tag\n• 🔴 **Nem sikerült (zárolt DM):** ${failCount} tag`;
+            if (statusMsg) await statusMsg.edit(resultText).catch(() => {});
+            else await m.reply(resultText).catch(() => {});
+
+        } catch (err) {
+            console.error('Hiba a tömeges DM küldés során:', err);
+            if (statusMsg) await statusMsg.edit('❌ Hiba történt a tagok lekérése vagy az üzenet küldése közben.').catch(() => {});
+        }
+        return;
+    }
 
     // 🔄 TELJES SZEZON RESET PARANCS
-    if (cmd === '.seasonreset') {
+    if (lowerCmd === '.seasonreset') {
         if (m.author.id !== CONFIG.FIXED_USER_ID) {
             return m.reply('❌ Nincs jogosultságod a szezon reset használatához! Kizárólag a bot tulajdonosa indíthatja el.').catch(() => {});
         }
@@ -829,16 +873,16 @@ client.on('messageCreate', async (m) => {
     }
 
     // 🛑 BOT LEÁLLÍTÁS ÉS INDÍTÁS KEZELÉS (.botstop / .botstart)
-    if (cmd === '.botstop' || cmd === '.botstart') {
+    if (lowerCmd === '.botstop' || lowerCmd === '.botstart') {
         if (m.author.id !== CONFIG.FIXED_USER_ID) {
             return m.reply('❌ Nincs jogosultságod ehhez a parancshoz! Kizárólag a bot tulajdonosa indíthatja el vagy állíthatja le.').catch(() => {});
         }
 
-        if (cmd === '.botstop') {
+        if (lowerCmd === '.botstop') {
             isMaintenanceMode = true;
             updateStatus(m.guild);
             return m.reply('🛑 **BOT TELJESEN LEÁLLÍTVA!** A parancsok lezárva mindenkinek!').catch(() => {});
-        } else if (cmd === '.botstart') {
+        } else if (lowerCmd === '.botstart') {
             isMaintenanceMode = false;
             updateStatus(m.guild);
             return m.reply('🚀 **BOT ELINDÍTVA!** A bot újra használható mindenki számára!').catch(() => {});
@@ -846,17 +890,17 @@ client.on('messageCreate', async (m) => {
     }
 
     if (Math.random() < 0.015) m.react(Math.random() < 0.5 ? '🤡' : '🤓').catch(() => {});
-    if (cmd === 'mikor') return m.reply('Majd ha piros hó esik! 🤡').catch(() => {});
-    if (cmd === 'miért' || cmd === 'miert') return m.reply('Mert csak! 🤫').catch(() => {});
+    if (lowerCmd === 'mikor') return m.reply('Majd ha piros hó esik! 🤡').catch(() => {});
+    if (lowerCmd === 'miért' || lowerCmd === 'miert') return m.reply('Mert csak! 🤫').catch(() => {});
 
-    if (['.sorsolas', '.partner', '.sima'].includes(cmd)) {
+    if (['.sorsolas', '.partner', '.sima'].includes(lowerCmd)) {
         await m.delete().catch(() => {});
         if (!m.member?.roles?.cache?.has(CONFIG.STAFF_ROLE) && m.author.id !== CONFIG.FIXED_USER_ID) {
             const r = await m.channel.send('❌ Nincs jogosultságod!');
             return setTimeout(() => r.delete().catch(() => {}), 3000);
         }
         try {
-            const res = await moveTicketCategory(m.channel, m.guild, cmd.replace('.', ''));
+            const res = await moveTicketCategory(m.channel, m.guild, lowerCmd.replace('.', ''));
             const r = await m.channel.send(`✅ Ticket áthelyezve ide: **${res.categoryName}**!`);
             setTimeout(() => r.delete().catch(() => {}), 4000);
         } catch (err) {
